@@ -1,0 +1,27 @@
+# 数据与密钥 (绝不打进镜像)
+data/
+**/data/
+*.db
+secret.key
+.mi.token
+*.log
+
+# 前端依赖与产物 (镜像内重新构建)
+frontend/node_modules/
+frontend/dist/
+
+# Python 缓存
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 开发环境
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+*.md
+!README.md

@@ -1,0 +1,43 @@
+[project]
+name = "miair-next"
+version = "0.0.1"
+description = "Make Xiaomi AI speakers act as DLNA / AirPlay renderers, with a modern admin panel"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "aiohttp>=3.9.0",
+    "miservice-fork",
+    "zeroconf>=0.38.0",
+    "pycryptodome>=3.15.0",
+    "av>=10.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# engine 为移植代码, 保持原样不纳入 lint
+extend-exclude = ["app/engine"]
+
+[tool.ruff.lint]
+# 显式指定规则集, 不依赖 ruff 默认值 (跨版本确定性);
+# 不启用 B008 (FastAPI 的 Depends() 默认参数为框架惯用法)
+select = ["E4", "E7", "E9", "F", "W", "I"]

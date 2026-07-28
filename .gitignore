@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.eggs/
+build/
+dist/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+*.local
+
+# 运行数据 (账号 / 密钥 / 配置持久化)
+data/
+*.db
+secret.key
+.mi.token
+*.log
+
+# 后端静态目录 (由前端构建产物填充)
+backend/app/static/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store

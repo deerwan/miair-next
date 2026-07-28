@@ -1,0 +1,57 @@
+name: 🐛 Bug 报告
+description: 报告一个问题, 帮助我们改进
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰描述遇到的问题
+      placeholder: 例如:投送音乐后音箱无声音,Web 后台显示 PLAYING
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开网易云音乐,选择投送设备
+        2. 点击播放
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: Web 后台「系统设置」页显示的应用版本
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - Docker (一键脚本 install.sh)
+        - Docker (docker run / compose)
+        - 本地开发运行
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 宿主机系统 / 架构 / 音箱型号
+      placeholder: Debian 12 / amd64 / 小爱音箱 Pro (LX06)
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: Web 后台「运行日志」页或 `./manage.sh logs` 的相关片段 (注意隐去 Cookie 等敏感信息)
+      render: text
