@@ -1,6 +1,8 @@
 <template>
   <n-space vertical :size="16">
-    <n-card title="播放控制">
+    <n-card>
+      <!-- 空 header 占位: n-card 无 title 时不渲染头部, header-extra 会被一并丢弃 -->
+      <template #header><span /></template>
       <template #header-extra>
         <n-button size="small" :loading="loading" @click="load">刷新音箱</n-button>
       </template>

@@ -32,3 +32,15 @@ export async function fetchMe(): Promise<{ username: string }> {
   const { data } = await http.get('/me')
   return data
 }
+
+export interface LoginLogItem {
+  username: string
+  ip: string
+  success: boolean
+  time: string
+}
+
+export async function fetchLoginLogs(limit = 50): Promise<LoginLogItem[]> {
+  const { data } = await http.get('/login/logs', { params: { limit } })
+  return data.logs
+}

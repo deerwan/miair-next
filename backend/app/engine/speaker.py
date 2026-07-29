@@ -24,12 +24,22 @@ class SpeakerController:
         self._last_volume: int = 50  # 用于 unmute 恢复
 
     @classmethod
-    def _check_and_trigger_restart(cls):
+    def _check_and_trigger_restart(cls, config=None):
         """检查连续登录失败次数，达到阈值时触发进程重启"""
         if cls._consecutive_login_failures >= cls._LOGIN_FAILURE_RESTART_THRESHOLD:
             log.error(
                 f"连续 {cls._consecutive_login_failures} 次登录失败，正在重启程序以恢复服务..."
             )
+            # 重启前推送通知, 让自愈动作对用户可见
+            if config is not None:
+                from app.engine.notify import notify_async
+                notify_async(
+                    config,
+                    "auto_restart",
+                    "[MiAir Next] 服务即将自动重启",
+                    f"连续 {cls._consecutive_login_failures} 次登录失败, 服务将自动重启以尝试恢复。"
+                    "若重启后仍收到此通知, 请到管理后台重新登录。",
+                )
             from app.engine.restart import _restart_process
             try:
                 asyncio.get_running_loop().call_soon(_restart_process)
@@ -146,7 +156,7 @@ class SpeakerController:
                 except Exception as e2:
                     log.error(f"重新登录后 stop 仍然失败: {e2}")
                     SpeakerController._consecutive_login_failures += 1
-                    SpeakerController._check_and_trigger_restart()
+                    SpeakerController._check_and_trigger_restart(self.auth.config)
                     return False
             return False
 
@@ -272,7 +282,7 @@ class SpeakerController:
                 except Exception as e2:
                     log.error(f"重新登录后 get_status 仍然失败: {e2}")
                     SpeakerController._consecutive_login_failures += 1
-                    SpeakerController._check_and_trigger_restart()
+                    SpeakerController._check_and_trigger_restart(self.auth.config)
             # 向上抛出异常，让调用者（如 DeviceServer 的轮询任务）捕获并忽略本次轮询
             raise Exception(f"get_status 失败: {e}")
 

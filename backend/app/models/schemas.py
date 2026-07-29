@@ -48,6 +48,10 @@ class SettingsPayload(BaseModel):
     default_volume: int | None = Field(default=None, ge=1, le=100)
     follow_device_volume: bool | None = None
     auto_restart: bool | None = None
+    notify_type: str | None = None
+    notify_feishu_webhook: str | None = None
+    notify_feishu_secret: str | None = None
+    notify_wxpusher_spt: str | None = None
     speakers: dict[str, SpeakerSettingPayload] | None = None
 
 

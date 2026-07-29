@@ -1,19 +1,8 @@
 <template>
   <div class="bar">
-    <n-button quaternary circle @click="app.toggleSider()">
-      <template #icon>
-        <n-icon size="20"><MenuOutline /></n-icon>
-      </template>
-    </n-button>
     <span class="title">{{ pageTitle }}</span>
 
     <div class="right">
-      <n-button quaternary circle @click="app.toggleDark()">
-        <template #icon>
-          <n-icon size="18"><MoonOutline v-if="!app.dark" /><SunnyOutline v-else /></n-icon>
-        </template>
-      </n-button>
-
       <n-dropdown trigger="click" :options="userOptions" @select="onUserSelect">
         <n-button quaternary>
           <template #icon>
@@ -32,12 +21,10 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NIcon, NDropdown, useMessage } from 'naive-ui'
-import { MenuOutline, MoonOutline, SunnyOutline, PersonCircleOutline } from '@vicons/ionicons5'
-import { useAppStore } from '@/stores/app'
+import { PersonCircleOutline } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import ChangePasswordModal from './ChangePasswordModal.vue'
 
-const app = useAppStore()
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()

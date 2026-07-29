@@ -74,6 +74,22 @@ def unmask_cookie(new_cookie: str, current_cookie: str) -> str:
     return "; ".join(parts)
 
 
+def mask_secret(value: str) -> str:
+    """通用密钥脱敏 (如 WxPusher SPT): 仅保留最后 3 位明文"""
+    if not value:
+        return value
+    if len(value) <= 3:
+        return MASKED_TOKEN
+    return MASKED_TOKEN + value[-3:]
+
+
+def unmask_secret(new_value: str, current_value: str) -> str:
+    """前端回写仍带脱敏占位符 (未修改) 时, 保留已存储的真实值"""
+    if new_value and MASKED_TOKEN in new_value:
+        return current_value
+    return new_value
+
+
 def mask_devices(device_list, required_fields=None):
     """按白名单裁剪设备信息, 仅保留 required_fields 指定的字段 (支持点号嵌套路径)"""
     if required_fields is None:

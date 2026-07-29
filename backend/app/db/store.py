@@ -1,11 +1,15 @@
-"""SQLite 用户存储 (单管理员场景, 预留多用户扩展)"""
+"""SQLite 存储: 用户 (单管理员场景, 预留多用户扩展) + 面板登录日志"""
 
 import sqlite3
 import threading
+from datetime import datetime
 
 from app.core.config import get_settings
 
 _lock = threading.Lock()
+
+# 登录日志保留条数上限 (超出后淘汰最旧记录)
+LOGIN_LOG_MAX_ROWS = 100
 
 
 def _connect() -> sqlite3.Connection:
@@ -23,6 +27,17 @@ def init_db():
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS login_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                created_at TEXT NOT NULL
             )
             """
         )
@@ -62,3 +77,36 @@ def update_password(username: str, password_hash: str) -> bool:
             (password_hash, username),
         )
         return cur.rowcount > 0
+
+
+def add_login_log(username: str, ip: str, success: bool):
+    """记录一次面板登录尝试, 并淘汰超出上限的最旧记录"""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO login_logs (username, ip, success, created_at) VALUES (?, ?, ?, ?)",
+            (username, ip, int(success), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.execute(
+            "DELETE FROM login_logs WHERE id NOT IN "
+            "(SELECT id FROM login_logs ORDER BY id DESC LIMIT ?)",
+            (LOGIN_LOG_MAX_ROWS,),
+        )
+
+
+def get_login_logs(limit: int = 50) -> list[dict]:
+    """最近的登录日志 (新的在前)"""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT username, ip, success, created_at FROM login_logs "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "username": r["username"],
+                "ip": r["ip"],
+                "success": bool(r["success"]),
+                "time": r["created_at"],
+            }
+            for r in rows
+        ]

@@ -25,6 +25,10 @@ export interface Settings {
   default_volume: number
   follow_device_volume: boolean
   auto_restart: boolean
+  notify_type: string
+  notify_feishu_webhook: string
+  notify_feishu_secret: string
+  notify_wxpusher_spt: string
   speakers: Record<string, SpeakerSetting>
   need_use_play_music_api: string[]
   device_list?: { miotDID: string; hardware: string; name: string }[]
@@ -99,5 +103,15 @@ export async function restartServices() {
 
 export async function restartProcess() {
   const { data } = await http.post('/system/restart_process')
+  return data
+}
+
+export interface NotifyTestResult {
+  ok: boolean
+  results: { feishu?: boolean; wxpusher?: boolean }
+}
+
+export async function testNotify(): Promise<NotifyTestResult> {
+  const { data } = await http.post('/system/notify/test')
   return data
 }

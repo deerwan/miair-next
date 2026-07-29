@@ -14,6 +14,7 @@ from app import __version__
 from app.api.deps import get_engine_config, get_orchestrator
 from app.core.config import get_settings
 from app.core.logging import LOG_NAME, ring_handler
+from app.engine.notify import send_notification
 from app.engine.restart import _restart_process
 from app.services.orchestrator import Orchestrator
 
@@ -82,6 +83,21 @@ async def restart_process():
     log.info("收到进程重启请求")
     asyncio.get_running_loop().call_later(0.5, _restart_process)
     return {"ok": True, "message": "进程正在重启"}
+
+
+@router.post("/system/notify/test")
+async def notify_test(config=Depends(get_engine_config)):
+    """向已配置的通知渠道发送测试消息 (跳过节流)"""
+    results = await send_notification(
+        config,
+        "test",
+        "[MiAir Next] 测试消息",
+        "如果你收到这条消息, 说明通知渠道配置成功。",
+        force=True,
+    )
+    if not results:
+        raise HTTPException(status_code=400, detail="未配置通知方式, 请先选择通知方式并保存对应凭证")
+    return {"ok": any(results.values()), "results": results}
 
 
 @router.get("/logs")

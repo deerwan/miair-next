@@ -122,7 +122,16 @@ class AuthManager:
                     )
                 else:
                     log.error(f"登录失败: {e}")
-                
+
+                # 推送登录失败通知 (同一事件 1 小时内只推一次)
+                from app.engine.notify import notify_async
+                notify_async(
+                    self.config,
+                    "login_failed",
+                    "[MiAir Next] 小米账号登录失败",
+                    f"错误: {e}\n请到管理后台检查账号配置, 或改用扫码/Cookie 方式登录。",
+                )
+
                 # 如果开启了自动重启，则在严重错误时尝试重启程序
                 if self.config.auto_restart:
                     log.warning("检测到登录失败，正在尝试自动重启程序以恢复服务...")
@@ -165,6 +174,14 @@ class AuthManager:
             # 但如果使用 cookie 登录，不要重新调用 login（避免 KeyError）
             if self.config.cookie:
                 log.error(f"Cookie 可能已过期，请重新获取: {e}")
+                # 推送登录失效通知 (同一事件 1 小时内只推一次)
+                from app.engine.notify import notify_async
+                notify_async(
+                    self.config,
+                    "login_expired",
+                    "[MiAir Next] 小米登录已失效",
+                    "Cookie 可能已过期, 请到管理后台重新扫码登录。",
+                )
                 return []
             await self.close()
             await self.login()

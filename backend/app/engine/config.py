@@ -86,6 +86,11 @@ class Config:
     # 自动重启（当登录失败或服务异常时）
     auto_restart: bool = False
     voice_poll_interval: int = 1
+    # 通知推送 (登录过期/失败提醒): notify_type 单选 (""=关闭 / feishu / wxpusher)
+    notify_type: str = ""
+    notify_feishu_webhook: str = ""
+    notify_feishu_secret: str = ""
+    notify_wxpusher_spt: str = ""
     speakers: dict = field(default_factory=dict)
 
     # 保存配置的线程锁（类级别共享）

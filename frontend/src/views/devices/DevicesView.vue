@@ -1,5 +1,7 @@
 <template>
-  <n-card title="设备管理">
+  <n-card>
+    <!-- 空 header 占位: n-card 无 title 时不渲染头部, header-extra 会被一并丢弃 -->
+    <template #header><span /></template>
     <template #header-extra>
       <n-button size="small" :loading="loading" @click="load">刷新</n-button>
     </template>

@@ -9,7 +9,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app import __version__
 from app.api.deps import get_engine_config, get_orchestrator
-from app.core.masking import mask_cookie, mask_devices, unmask_cookie
+from app.core.masking import (
+    mask_cookie,
+    mask_devices,
+    mask_secret,
+    unmask_cookie,
+    unmask_secret,
+)
 from app.engine.const import NEED_USE_PLAY_MUSIC_API
 from app.engine.const import VERSION as ENGINE_VERSION
 from app.models.schemas import SettingsPayload
@@ -43,6 +49,10 @@ async def get_settings_api(
         "default_volume": config.default_volume,
         "follow_device_volume": config.follow_device_volume,
         "auto_restart": config.auto_restart,
+        "notify_type": config.notify_type,
+        "notify_feishu_webhook": config.notify_feishu_webhook,
+        "notify_feishu_secret": mask_secret(config.notify_feishu_secret),
+        "notify_wxpusher_spt": mask_secret(config.notify_wxpusher_spt),
         "need_use_play_music_api": NEED_USE_PLAY_MUSIC_API,
     }
 
@@ -97,6 +107,20 @@ async def save_settings_api(
         config.follow_device_volume = payload.follow_device_volume
     if payload.auto_restart is not None:
         config.auto_restart = payload.auto_restart
+    if payload.notify_type is not None:
+        config.notify_type = payload.notify_type.strip()
+    if payload.notify_feishu_webhook is not None:
+        config.notify_feishu_webhook = payload.notify_feishu_webhook.strip()
+    if payload.notify_feishu_secret is not None:
+        # 回写的是脱敏占位符 (未修改) 时保留已存储的真实密钥
+        config.notify_feishu_secret = unmask_secret(
+            payload.notify_feishu_secret.strip(), config.notify_feishu_secret
+        )
+    if payload.notify_wxpusher_spt is not None:
+        # 回写的是脱敏占位符 (未修改) 时保留已存储的真实 SPT
+        config.notify_wxpusher_spt = unmask_secret(
+            payload.notify_wxpusher_spt.strip(), config.notify_wxpusher_spt
+        )
 
     if payload.speakers:
         for did, speaker_data in payload.speakers.items():
