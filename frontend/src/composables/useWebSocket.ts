@@ -1,5 +1,6 @@
 import { onUnmounted, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import router from '@/router'
 
 export interface StatusMessage {
   type: 'status'
@@ -50,9 +51,18 @@ export function useWebSocket() {
         /* 忽略非法消息 */
       }
     }
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       connected.value = false
-      // 断线自动重连
+      // 4401: token 无效/过期, 不再重连, 清登录态回登录页 (避免无限重连被拒)
+      if (ev.code === 4401) {
+        const auth = useAuthStore()
+        auth.logout()
+        if (router.currentRoute.value.name !== 'login') {
+          router.push({ name: 'login' })
+        }
+        return
+      }
+      // 其它原因断线自动重连
       retryTimer = window.setTimeout(connect, 3000)
     }
     ws.onerror = () => ws?.close()

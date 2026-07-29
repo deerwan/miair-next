@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+import os
 import resource
 import sys
 import time
 
 import aiohttp
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import __version__
@@ -24,6 +26,10 @@ router = APIRouter()
 
 # 进程启动时刻 (模块导入时记录, 用于计算运行时长)
 _START_TIME = time.time()
+
+# 版本检查结果缓存 (result, timestamp), TTL 内直接返回, 避免 GitHub 匿名限流
+_UPDATE_CACHE_TTL = 600
+_update_cache: tuple[dict, float] | None = None
 
 
 def _memory_mb() -> float | None:
@@ -109,6 +115,22 @@ async def recent_logs(limit: int = 200):
     return {"lines": lines}
 
 
+@router.get("/logs/download")
+async def download_logs(config=Depends(get_engine_config)):
+    """下载落盘的完整日志文件 (miair.log)。
+
+    内存环形缓冲仅留最近若干行, 文件则保留本次运行期全量日志。
+    """
+    log_file = config.log_file
+    if not os.path.isfile(log_file):
+        raise HTTPException(status_code=404, detail="日志文件不存在")
+    return FileResponse(
+        log_file,
+        media_type="text/plain",
+        filename="miair.log",
+    )
+
+
 # 允许运行时切换的日志等级
 _LOG_LEVELS = {
     "debug": logging.DEBUG,
@@ -160,12 +182,21 @@ def _parse_version(v: str) -> tuple:
 
 
 @router.get("/system/check_update")
-async def check_update():
+async def check_update(force: bool = False):
     """检查 GitHub 最新 Release, 返回是否有新版本。
 
     适配 Docker 镜像发布模式: 仅提示新版本与 Release 链接, 不自动覆盖代码;
     用户自行重新拉取镜像升级。
+
+    成功结果缓存 10 分钟, 避免频繁请求触发 GitHub 匿名限流 (60 次/小时);
+    force=true 可强制绕过缓存。
     """
+    global _update_cache
+    if not force and _update_cache is not None:
+        cached, ts = _update_cache
+        if time.time() - ts < _UPDATE_CACHE_TTL:
+            return cached
+
     repo = get_settings().github_repo
     current = __version__
     url = f"https://api.github.com/repos/{repo}/releases/latest"
@@ -193,7 +224,7 @@ async def check_update():
     tag = (data.get("tag_name") or "").strip()
     latest = tag.lstrip("vV")
     update_available = bool(latest) and _parse_version(latest) > _parse_version(current)
-    return {
+    result = {
         "current": current,
         "latest": latest or None,
         "update_available": update_available,
@@ -202,3 +233,6 @@ async def check_update():
         "published_at": data.get("published_at"),
         "notes": (data.get("body") or "")[:2000],
     }
+    # 仅缓存成功结果 (错误不缓存, 便于下次重试)
+    _update_cache = (result, time.time())
+    return result

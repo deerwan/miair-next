@@ -27,6 +27,14 @@ class AppSettings:
         self.login_max_failures = 5
         self.login_lockout_seconds = 600
 
+        # 仅在面板部署于可信反向代理后时置为 1/true,
+        # 直连部署下信任 X-Forwarded-For 会被伪造头绕过登录限速
+        self.trust_proxy = os.environ.get("MIAIR_TRUST_PROXY", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
         self.secret_key = self._load_or_create_secret()
 
     def _load_or_create_secret(self) -> str:

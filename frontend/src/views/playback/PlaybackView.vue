@@ -1,9 +1,7 @@
 <template>
   <n-space vertical :size="16">
-    <n-card>
-      <!-- 空 header 占位: n-card 无 title 时不渲染头部, header-extra 会被一并丢弃 -->
-      <template #header><span /></template>
-      <template #header-extra>
+    <toolbar-card>
+      <template #toolbar>
         <n-button size="small" :loading="loading" @click="load">刷新音箱</n-button>
       </template>
 
@@ -20,35 +18,30 @@
             </n-button>
           </n-input-group>
         </n-form-item>
-        <n-form-item label="传输控制">
-          <n-space>
-            <n-button :disabled="!currentDid" @click="doPause">暂停</n-button>
-            <n-button :disabled="!currentDid" @click="doStop">停止</n-button>
-          </n-space>
-        </n-form-item>
         <n-form-item label="音量">
-          <n-space align="center" style="width: 100%">
-            <n-slider v-model:value="volume" :step="1" :min="0" :max="100" style="width: 240px" />
+          <n-space align="center" :wrap="true" style="width: 100%">
+            <n-slider v-model:value="volume" :step="1" :min="0" :max="100" style="flex: 1 1 200px; min-width: 160px" />
             <n-input-number v-model:value="volume" :min="0" :max="100" size="small" style="width: 100px" />
             <n-button size="small" :disabled="!currentDid" @click="doSetVolume">设置</n-button>
             <n-button size="small" :disabled="!currentDid" @click="doGetVolume">读取当前</n-button>
           </n-space>
         </n-form-item>
       </n-form>
-    </n-card>
+    </toolbar-card>
   </n-space>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  NSpace, NCard, NButton, NEmpty, NForm, NFormItem, NSelect, NInput, NInputGroup,
+  NSpace, NButton, NEmpty, NForm, NFormItem, NSelect, NInput, NInputGroup,
   NSlider, NInputNumber, useMessage,
 } from 'naive-ui'
 import {
-  fetchSpeakers, playUrl, pauseSpeaker, stopSpeaker, setVolume, getVolume,
+  fetchSpeakers, playUrl, setVolume, getVolume,
   type SpeakerStatus,
 } from '@/api/speakers'
+import ToolbarCard from '@/components/ToolbarCard.vue'
 
 const message = useMessage()
 const speakers = ref<SpeakerStatus[]>([])
@@ -79,22 +72,14 @@ async function doPlay() {
   }
 }
 
-async function doPause() {
-  if (!currentDid.value) return
-  await pauseSpeaker(currentDid.value)
-  message.success('已暂停')
-}
-
-async function doStop() {
-  if (!currentDid.value) return
-  await stopSpeaker(currentDid.value)
-  message.success('已停止')
-}
-
 async function doSetVolume() {
   if (!currentDid.value) return
-  await setVolume(currentDid.value, volume.value)
-  message.success(`音量已设为 ${volume.value}`)
+  try {
+    await setVolume(currentDid.value, volume.value)
+    message.success(`音量已设为 ${volume.value}`)
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '设置音量失败')
+  }
 }
 
 async function doGetVolume() {
@@ -102,8 +87,8 @@ async function doGetVolume() {
   try {
     const res = await getVolume(currentDid.value)
     volume.value = res.volume
-  } catch {
-    /* 忽略读取失败 */
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '读取音量失败')
   }
 }
 
@@ -114,6 +99,8 @@ async function load() {
     if (!currentDid.value && speakers.value.length > 0) {
       currentDid.value = speakers.value[0].did
     }
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '加载音箱列表失败')
   } finally {
     loading.value = false
   }

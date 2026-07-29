@@ -107,20 +107,6 @@ async def play_url(
     return {"ok": ok}
 
 
-@router.post("/speakers/{did}/pause")
-async def pause(did: str, orch: Orchestrator = Depends(get_orchestrator)):
-    controller = _get_controller(orch, did)
-    ok = await controller.pause()
-    return {"ok": ok}
-
-
-@router.post("/speakers/{did}/stop")
-async def stop(did: str, orch: Orchestrator = Depends(get_orchestrator)):
-    controller = _get_controller(orch, did)
-    ok = await controller.stop()
-    return {"ok": ok}
-
-
 @router.post("/speakers/{did}/volume")
 async def set_volume(
     did: str,

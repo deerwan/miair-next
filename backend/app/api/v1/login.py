@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
     hash_password,
@@ -25,13 +26,18 @@ router = APIRouter()
 
 
 def _client_ip(request: Request) -> str:
-    """客户端真实 IP: 反代场景优先取 X-Forwarded-For / X-Real-IP 头"""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip", "")
-    if real_ip:
-        return real_ip.strip()
+    """客户端 IP: 仅当 MIAIR_TRUST_PROXY 开启时才信任反代头
+
+    直连部署下无条件信任 X-Forwarded-For 会被伪造头绕过登录限速,
+    并污染登录日志中的 IP 记录。
+    """
+    if get_settings().trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip", "")
+        if real_ip:
+            return real_ip.strip()
     if request.client:
         return request.client.host
     return "unknown"

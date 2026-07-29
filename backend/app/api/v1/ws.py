@@ -14,6 +14,7 @@ log = logging.getLogger("miair")
 router = APIRouter()
 
 STATUS_INTERVAL = 3  # 状态推送间隔 (秒)
+TOKEN_RECHECK_INTERVAL = 60  # token 过期复验间隔 (秒)
 
 
 def _collect_status(orch) -> dict:
@@ -61,9 +62,18 @@ async def websocket_endpoint(websocket: WebSocket, token: str = ""):
             await websocket.send_text(json.dumps(_collect_status(orch), ensure_ascii=False))
             await asyncio.sleep(STATUS_INTERVAL)
 
+    async def check_token():
+        # 连接建立后 token 仍可能过期, 周期复验; 失效则主动关闭 (4401)
+        while True:
+            await asyncio.sleep(TOKEN_RECHECK_INTERVAL)
+            if not decode_access_token(token):
+                await websocket.close(code=4401)
+                return
+
     tasks = [
         asyncio.create_task(push_logs()),
         asyncio.create_task(push_status()),
+        asyncio.create_task(check_token()),
     ]
     try:
         # 保持接收循环以感知客户端断开

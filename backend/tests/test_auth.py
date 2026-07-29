@@ -161,7 +161,7 @@ class TestChangePassword:
 
 
 class TestClientIp:
-    """_client_ip: 反代头优先于直连地址"""
+    """_client_ip: 默认忽略反代头 (防伪造), 仅 MIAIR_TRUST_PROXY 开启时才信任"""
 
     @staticmethod
     def _make_request(headers=None, host="10.0.0.1"):
@@ -172,21 +172,41 @@ class TestClientIp:
             client=SimpleNamespace(host=host) if host else None,
         )
 
+    @staticmethod
+    def _set_trust_proxy(value: bool):
+        from app.core.config import get_settings
+
+        get_settings().trust_proxy = value
+
     def test_direct_connection(self):
         from app.api.v1.login import _client_ip
 
         assert _client_ip(self._make_request()) == "10.0.0.1"
         assert _client_ip(self._make_request(host=None)) == "unknown"
 
-    def test_proxy_headers(self):
+    def test_proxy_headers_ignored_by_default(self):
         from app.api.v1.login import _client_ip
 
-        # X-Forwarded-For 取第一跳 (真实客户端)
-        req = self._make_request({"x-forwarded-for": "1.2.3.4, 172.17.0.1"})
-        assert _client_ip(req) == "1.2.3.4"
-        # 无 XFF 时退化到 X-Real-IP
-        req = self._make_request({"x-real-ip": "5.6.7.8"})
-        assert _client_ip(req) == "5.6.7.8"
+        self._set_trust_proxy(False)
+        # 默认不信任反代头: 伪造 XFF 不生效, 仍用 socket 地址
+        req = self._make_request(
+            {"x-forwarded-for": "1.2.3.4, 172.17.0.1"}, host="10.0.0.1"
+        )
+        assert _client_ip(req) == "10.0.0.1"
+
+    def test_proxy_headers_trusted_when_enabled(self):
+        from app.api.v1.login import _client_ip
+
+        self._set_trust_proxy(True)
+        try:
+            # X-Forwarded-For 取第一跳 (真实客户端)
+            req = self._make_request({"x-forwarded-for": "1.2.3.4, 172.17.0.1"})
+            assert _client_ip(req) == "1.2.3.4"
+            # 无 XFF 时退化到 X-Real-IP
+            req = self._make_request({"x-real-ip": "5.6.7.8"})
+            assert _client_ip(req) == "5.6.7.8"
+        finally:
+            self._set_trust_proxy(False)
 
 
 class TestLoginLogs:

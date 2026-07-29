@@ -79,8 +79,13 @@ def create_app() -> FastAPI:
         @app.get("/{full_path:path}")
         async def spa(full_path: str):
             candidate = os.path.normpath(os.path.join(STATIC_DIR, full_path))
-            # 防目录穿越
-            if candidate.startswith(STATIC_DIR) and os.path.isfile(candidate):
+            # 防目录穿越: 用 commonpath 严格判断 candidate 确实在静态目录内,
+            # 避免同前缀兄弟目录 (如 static-backup) 被误放行
+            try:
+                in_static = os.path.commonpath([STATIC_DIR, candidate]) == STATIC_DIR
+            except ValueError:
+                in_static = False
+            if in_static and os.path.isfile(candidate):
                 return FileResponse(candidate)
             index = os.path.join(STATIC_DIR, "index.html")
             if os.path.isfile(index):

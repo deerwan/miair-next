@@ -80,6 +80,19 @@ export async function setLogLevel(level: LogLevel) {
   return data
 }
 
+/** 下载完整日志文件 (带鉴权头, 以 blob 取回后浏览器另存) */
+export async function downloadLogs(): Promise<void> {
+  const resp = await http.get('/logs/download', { responseType: 'blob' })
+  const url = URL.createObjectURL(resp.data)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'miair.log'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export interface UpdateInfo {
   current: string
   latest: string | null

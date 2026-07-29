@@ -1,8 +1,6 @@
 <template>
-  <n-card>
-    <!-- 空 header 占位: n-card 无 title 时不渲染头部, header-extra 会被一并丢弃 -->
-    <template #header><span /></template>
-    <template #header-extra>
+  <toolbar-card>
+    <template #toolbar>
       <n-button size="small" :loading="loading" @click="load">刷新</n-button>
     </template>
 
@@ -12,19 +10,21 @@
       :columns="columns"
       :data="speakers"
       :bordered="false"
+      :scroll-x="720"
       size="small"
     />
-  </n-card>
+  </toolbar-card>
 </template>
 
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue'
 import {
-  NCard, NButton, NDataTable, NEmpty, NTag, NSpace, NInput, NSwitch, NTooltip,
+  NButton, NDataTable, NEmpty, NTag, NSpace, NInput, NSwitch, NTooltip,
   useMessage, type DataTableColumns,
 } from 'naive-ui'
 import { fetchSpeakers, renameSpeaker, setCompatibilityMode, type SpeakerStatus } from '@/api/speakers'
 import { getDeviceModelInfo, getDeviceImageUrl } from '@/utils/deviceModel'
+import ToolbarCard from '@/components/ToolbarCard.vue'
 
 const message = useMessage()
 const speakers = ref<SpeakerStatus[]>([])
@@ -114,16 +114,22 @@ async function doRename(row: SpeakerStatus) {
     message.warning('请输入新名称')
     return
   }
-  await renameSpeaker(row.did, name)
-  message.success('已重命名, 部分投送端需重连生效')
-  editing.value[row.did] = ''
-  await load()
+  try {
+    await renameSpeaker(row.did, name)
+    message.success('已重命名, 部分投送端需重连生效')
+    editing.value[row.did] = ''
+    await load()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重命名失败')
+  }
 }
 
 async function load() {
   loading.value = true
   try {
     speakers.value = await fetchSpeakers()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '加载音箱列表失败')
   } finally {
     loading.value = false
   }

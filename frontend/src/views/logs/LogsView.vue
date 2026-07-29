@@ -1,8 +1,6 @@
 <template>
-  <n-card>
-    <!-- 空 header 占位: n-card 无 title 时不渲染头部, header-extra 会被一并丢弃 -->
-    <template #header><span /></template>
-    <template #header-extra>
+  <toolbar-card>
+    <template #toolbar>
       <n-space :size="8" align="center">
         <n-tag :type="connected ? 'success' : 'error'" size="small" round>
           {{ connected ? '实时连接' : '已断开' }}
@@ -16,6 +14,7 @@
           @update:value="changeLevel"
         />
         <n-checkbox v-model:checked="autoScroll">自动滚动</n-checkbox>
+        <n-button size="small" :loading="downloading" @click="download">下载完整日志</n-button>
         <n-popconfirm @positive-click="clear">
           <template #trigger>
             <n-button size="small">清空</n-button>
@@ -32,16 +31,17 @@
       trim
       style="font-size: 12px"
     />
-  </n-card>
+  </toolbar-card>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
-  NCard, NSpace, NTag, NButton, NCheckbox, NLog, NPopconfirm, NSelect, useMessage,
+  NSpace, NTag, NButton, NCheckbox, NLog, NPopconfirm, NSelect, useMessage,
 } from 'naive-ui'
-import { fetchLogs, fetchLogLevel, setLogLevel, type LogLevel } from '@/api/system'
+import { fetchLogs, fetchLogLevel, setLogLevel, downloadLogs, type LogLevel } from '@/api/system'
 import { useWebSocket } from '@/composables/useWebSocket'
+import ToolbarCard from '@/components/ToolbarCard.vue'
 
 const message = useMessage()
 const { connected, logLines } = useWebSocket()
@@ -52,6 +52,7 @@ const logRef = ref<InstanceType<typeof NLog> | null>(null)
 // 日志等级 (运行时切换后端 logger, 不持久化, 重启后恢复默认)
 const logLevel = ref<LogLevel>('info')
 const levelLoading = ref(false)
+const downloading = ref(false)
 const levelOptions = [
   { label: 'DEBUG (详细)', value: 'debug' },
   { label: 'INFO (默认)', value: 'info' },
@@ -87,6 +88,17 @@ watch(logText, () => {
 function clear() {
   history.value = []
   logLines.value.length = 0
+}
+
+async function download() {
+  downloading.value = true
+  try {
+    await downloadLogs()
+  } catch (e: any) {
+    message.error(e.response?.status === 404 ? '日志文件不存在' : '下载日志失败')
+  } finally {
+    downloading.value = false
+  }
 }
 
 onMounted(async () => {

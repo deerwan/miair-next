@@ -50,10 +50,31 @@ def decode_access_token(token: str) -> str | None:
 class LoginRateLimiter:
     """登录失败限速 (内存记录, 按客户端 IP)"""
 
+    # 记录键数上限, 防止伪造 IP 海量堆积导致内存增长
+    MAX_KEYS = 4096
+
     def __init__(self, max_failures: int, lockout_seconds: int):
         self.max_failures = max_failures
         self.lockout_seconds = lockout_seconds
         self._failures: dict[str, list[float]] = {}
+
+    def _evict_if_needed(self):
+        """超出上限时清理已过期键, 仍超限则从最早的开始剔除"""
+        if len(self._failures) <= self.MAX_KEYS:
+            return
+        now = time.time()
+        window_start = now - self.lockout_seconds
+        self._failures = {
+            k: recs
+            for k, v in self._failures.items()
+            if (recs := [t for t in v if t > window_start])
+        }
+        if len(self._failures) > self.MAX_KEYS:
+            # 按最近一次失败时间排序, 保留最新的 MAX_KEYS 个
+            newest = sorted(
+                self._failures.items(), key=lambda kv: kv[1][-1], reverse=True
+            )[: self.MAX_KEYS]
+            self._failures = dict(newest)
 
     def is_locked(self, key: str) -> int:
         """返回剩余锁定秒数, 0 表示未锁定"""
@@ -67,6 +88,7 @@ class LoginRateLimiter:
 
     def record_failure(self, key: str):
         self._failures.setdefault(key, []).append(time.time())
+        self._evict_if_needed()
 
     def reset(self, key: str):
         self._failures.pop(key, None)

@@ -192,7 +192,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NSpace, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
@@ -202,6 +202,7 @@ import {
 import { fetchSettings, saveSettings, restartProcess, checkUpdate, testNotify, type UpdateInfo } from '@/api/system'
 import { fetchLoginLogs, type LoginLogItem } from '@/api/auth'
 import { useAppStore } from '@/stores/app'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const app = useAppStore()
 
@@ -210,12 +211,7 @@ const loading = ref(false)
 const saving = ref(false)
 
 // 移动端适配: 窄屏时标签改为上方排列, 避免 160px 左标签挤压输入区
-const isMobile = ref(window.innerWidth < 640)
-function onResize() {
-  isMobile.value = window.innerWidth < 640
-}
-window.addEventListener('resize', onResize)
-onBeforeUnmount(() => window.removeEventListener('resize', onResize))
+const isMobile = useIsMobile()
 
 const labelPlacement = computed(() => (isMobile.value ? 'top' : 'left'))
 const labelWidth = computed(() => (isMobile.value ? undefined : 160))
