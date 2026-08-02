@@ -31,6 +31,9 @@
                 <n-form-item label="DLNA 端口">
                   <n-input-number v-model:value="form.dlna_port" :min="1" :max="65535" />
                 </n-form-item>
+                <n-alert v-if="dlnaPortHint" type="warning" :show-icon="true" style="margin: -12px 0 8px">
+                  {{ dlnaPortHint }}
+                </n-alert>
                 <n-form-item label="设备离线自动重启">
                   <n-switch v-model:value="form.auto_restart" />
                 </n-form-item>
@@ -266,12 +269,18 @@ const form = reactive({
   resume_delay_seconds: 3,
   default_volume: 50,
   follow_device_volume: false,
-  dlna_port: 8300,
+  dlna_port: 8200,
   auto_restart: true,
   notify_type: '',
   notify_feishu_webhook: '',
   notify_feishu_secret: '',
   notify_wxpusher_spt: '',
+})
+
+// 仅在 DLNA 使用默认端口 8200 时, 提示可能被 fnOS 自带 DLNA 占用
+const dlnaPortHint = computed(() => {
+  if (form.dlna_port !== 8200) return ''
+  return '当前 DLNA 使用默认端口 8200。在 fnOS 系统上，该端口可能被系统自带的 DLNA 服务占用，导致 MiAir 的 DLNA 无法正常启动。可二选一：① 将上方端口改为 8201 或其他空闲端口后保存；② 或关闭 fnOS 自带的 DLNA（入口在 fnOS 设置 → 文件共享协议 → 关闭 DLNA 即可）。'
 })
 
 // 通知方式候选 (青龙式单选)
