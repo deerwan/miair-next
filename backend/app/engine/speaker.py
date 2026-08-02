@@ -18,10 +18,21 @@ class SpeakerController:
     _consecutive_login_failures: int = 0
     _LOGIN_FAILURE_RESTART_THRESHOLD = 6  # 连续失败 6 次后触发重启
 
-    def __init__(self, speaker: Speaker, auth: AuthManager):
+    def __init__(self, speaker: Speaker, auth: AuthManager, config: Config | None = None):
         self.speaker = speaker
         self.auth = auth
+        self.config = config
         self._last_volume: int = 50  # 用于 unmute 恢复
+
+    def _default_audio_id(self) -> str:
+        """小米云路线默认封面 audioID。
+
+        优先使用用户在 Web 配置的 default_audio_id (小米曲库某歌曲的 audioID)，
+        未配置时回退到内置默认值 const.DEFAULT_AUDIO_ID。
+        """
+        if self.config and self.config.default_audio_id and self.config.default_audio_id.strip():
+            return self.config.default_audio_id.strip()
+        return DEFAULT_AUDIO_ID
 
     @classmethod
     def _check_and_trigger_restart(cls, config=None):
@@ -65,7 +76,7 @@ class SpeakerController:
             await self.auth.ensure_login()
             if self._should_use_music_api():
                 ret = await self.auth.mina_service.play_by_music_url(
-                    self.device_id, url, audio_id=DEFAULT_AUDIO_ID
+                    self.device_id, url, audio_id=self._default_audio_id()
                 )
                 log.info(f"play_by_music_url device_id={self.device_id} ret={ret}")
             else:
@@ -85,7 +96,7 @@ class SpeakerController:
                     await self.auth.ensure_login()
                     if self._should_use_music_api():
                         ret = await self.auth.mina_service.play_by_music_url(
-                            self.device_id, url, audio_id=DEFAULT_AUDIO_ID
+                            self.device_id, url, audio_id=self._default_audio_id()
                         )
                     else:
                         ret = await self.auth.mina_service.play_by_url(self.device_id, url)
@@ -303,7 +314,7 @@ class SpeakerManager:
         # 为每个启用的音箱创建控制器
         for speaker in self.config.get_enabled_speakers():
             if speaker.device_id:
-                self.controllers[speaker.did] = SpeakerController(speaker, self.auth)
+                self.controllers[speaker.did] = SpeakerController(speaker, self.auth, self.config)
                 log.info(
                     f"已初始化音箱控制器: {speaker.get_dlna_name()} (did={speaker.did})"
                 )

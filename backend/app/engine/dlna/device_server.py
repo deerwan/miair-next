@@ -20,6 +20,10 @@ from app.engine.const import (
 )
 from app.engine.dlna.eventing import EventManager, build_last_change_event
 from app.engine.dlna.media_buffer import MediaBuffer
+from app.engine.dlna.cover import (
+    default_cover_asset_path,
+    resolve_default_cover_url,
+)
 from app.engine.dlna.renderer import DLNARenderer
 from app.engine.dlna.soap_handler import (
     handle_soap_request,
@@ -109,6 +113,8 @@ class DeviceServer:
         )
         # 媒体代理 (音箱从此拉取音频流)
         self.app.router.add_get("/media/{token}", self._handle_media_proxy)
+        # 通用默认封面 (无封面投送时，DLNA/AirPlay 触屏兜底显示)
+        self.app.router.add_get("/default-cover", self._handle_default_cover)
 
     def _get_proxy_session(self) -> aiohttp.ClientSession:
         """获取/创建用于下载的持久 session，带连接池限制和超时"""
@@ -693,6 +699,21 @@ class DeviceServer:
     def resume_proxy_for_renderer(self, udn: str):
         """恢复渲染器的代理访问（播放/停止时调用）"""
         self._paused_proxy_udns.discard(udn)
+
+    async def _handle_default_cover(self, request: web.Request) -> web.Response:
+        """通用默认封面处理器。
+
+        当投送方未提供封面时，DLNA/AirPlay 触屏回退到这张内置默认图。
+        若用户在 Web 配置 default_cover_url，则优先返回该地址 (由解析逻辑决定，
+        此处始终返回内置资源；可配置 URL 由 renderer/airplay 注入元数据时使用)。
+        """
+        path = default_cover_asset_path()
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            return web.Response(status=404, text="Default cover not found")
+        return web.Response(body=data, content_type="image/png")
 
     async def _handle_media_proxy(self, request: web.Request) -> web.StreamResponse:
         """媒体代理处理器 - 从内存缓冲提供音频，支持 Range/Seek"""

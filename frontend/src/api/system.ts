@@ -25,6 +25,8 @@ export interface Settings {
   default_volume: number
   follow_device_volume: boolean
   auto_restart: boolean
+  default_cover_url: string
+  default_audio_id: string
   notify_type: string
   notify_feishu_webhook: string
   notify_feishu_secret: string

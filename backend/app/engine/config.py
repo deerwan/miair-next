@@ -81,6 +81,12 @@ class Config:
     default_volume: int = 38
     # 实验性功能：跟随设备当前音量
     follow_device_volume: bool = True
+    # 通用默认封面 (DLNA 路线)：用户在 Web 配置的封面图片 URL（可选）。
+    # 为空时回退到后端内置默认封面 (/default-cover)，保证开箱即用。
+    default_cover_url: str = ""
+    # 小米云默认封面 audioID (play_by_music_url 路线)：小米曲库中某首歌的 audioID，
+    # 用于触屏/带屏音箱显示封面与歌词。为空时回退到内置默认值 (const.DEFAULT_AUDIO_ID)。
+    default_audio_id: str = ""
     # 语音控制
     enable_voice_control: bool = False
     # 自动重启（当登录失败或服务异常时）

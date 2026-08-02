@@ -54,6 +54,8 @@ async def get_settings_api(
         "notify_feishu_secret": mask_secret(config.notify_feishu_secret),
         "notify_wxpusher_spt": mask_secret(config.notify_wxpusher_spt),
         "need_use_play_music_api": NEED_USE_PLAY_MUSIC_API,
+        "default_audio_id": config.default_audio_id,
+        "default_cover_url": config.default_cover_url,
     }
 
     speakers_info = {}
@@ -107,6 +109,10 @@ async def save_settings_api(
         config.follow_device_volume = payload.follow_device_volume
     if payload.auto_restart is not None:
         config.auto_restart = payload.auto_restart
+    if payload.default_cover_url is not None:
+        config.default_cover_url = payload.default_cover_url.strip()
+    if payload.default_audio_id is not None:
+        config.default_audio_id = payload.default_audio_id.strip()
     if payload.notify_type is not None:
         config.notify_type = payload.notify_type.strip()
     if payload.notify_feishu_webhook is not None:

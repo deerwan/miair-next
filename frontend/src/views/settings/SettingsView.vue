@@ -37,6 +37,33 @@
                 <n-form-item label="设备离线自动重启">
                   <n-switch v-model:value="form.auto_restart" />
                 </n-form-item>
+                <n-form-item label="小米云默认封面 (可选)">
+                  <div class="field-with-tip">
+                    <n-select
+                      v-model:value="form.default_audio_id"
+                      :options="coverOptions"
+                      placeholder="留空则使用内置默认封面"
+                      clearable
+                      filterable
+                      style="max-width: 400px"
+                    />
+                    <n-space v-if="selectedCover" align="center" :size="10" style="margin-top: 8px">
+                      <n-image
+                        :src="selectedCover"
+                        width="76"
+                        height="76"
+                        :preview-disabled="true"
+                        style="border-radius: 6px"
+                      />
+                      <n-text depth="3" class="field-tip">
+                        小米触屏/带屏音箱走小米云播放时, 触屏显示的封面与歌词来源 (audioID: {{ form.default_audio_id }})。选好保存后重新投送即可生效; 留空使用内置默认。
+                      </n-text>
+                    </n-space>
+                    <n-text v-else depth="3" class="field-tip">
+                      小米触屏/带屏音箱走小米云播放时, 触屏显示的封面与歌词来源。需为小米曲库中某首歌的 audioID; 留空使用内置默认。
+                    </n-text>
+                  </div>
+                </n-form-item>
               </n-space>
             </n-form>
           </n-tab-pane>
@@ -201,6 +228,7 @@ import {
   NSpace, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
   NPopconfirm, NDescriptions, NDescriptionsItem, NAlert, NText, NTabs, NTabPane, NImage,
   NDataTable, NEmpty, NTag, NRadioGroup, NRadioButton, useMessage, type DataTableColumns,
+  type SelectOption,
 } from 'naive-ui'
 import { fetchSettings, saveSettings, restartProcess, checkUpdate, testNotify, type UpdateInfo } from '@/api/system'
 import { fetchLoginLogs, type LoginLogItem } from '@/api/auth'
@@ -271,6 +299,8 @@ const form = reactive({
   follow_device_volume: false,
   dlna_port: 8200,
   auto_restart: true,
+  default_cover_url: '',
+  default_audio_id: '',
   notify_type: '',
   notify_feishu_webhook: '',
   notify_feishu_secret: '',
@@ -289,6 +319,34 @@ const notifyTypeOptions = [
   { label: '飞书机器人', value: 'feishu' },
   { label: 'WxPusher 极简推送', value: 'wxpusher' },
 ]
+
+// 预设小米云封面 (照搬 songloft 后台下拉, audioID = 曲库真实歌曲 ID, cover = 预览图 CDN)
+interface CoverOption extends SelectOption {
+  label: string
+  value: string
+  cover?: string
+}
+const coverOptions: CoverOption[] = [
+  { label: '内置默认封面 (留空时使用)', value: '448161862632079419' },
+  { label: '星河雀影', value: '436490277987655', cover: 'https://y.gtimg.cn/music/photo_new/T001R500x500M000000XFSu32aHi5w_7.jpg' },
+  { label: '鲸落', value: '2284848025338642973', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000003MUXTN0hp00B_1.jpg' },
+  { label: '仲夏涟漪', value: '3032977774822294038', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000000P52RF0ePrMh_1.jpg' },
+  { label: '星辰妙漫', value: '3573885250148762567', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000001XSQmy0sbGRe_1.jpg' },
+  { label: '所念皆星河', value: '2821554561643067278', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000003mtKhW0DFTMt_3.jpg' },
+  { label: '柳岸泊舟', value: '1949968393125757902', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000003zlK2H16UvnY_2.jpg' },
+  { label: '花冠少女', value: '1963040443250771008', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000004HWTo41EPK3L_2.jpg' },
+  { label: '月夜', value: '703059981413384476', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000002OGzkK12zb2D_1.jpg' },
+  { label: '橘子海', value: '2182123779048604035', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000001wIZl83iCjqo_1.jpg' },
+  { label: '拾音者', value: '1299407089048748519', cover: 'https://y.gtimg.cn/music/photo_new/T001R500x500M000002knSQ01Ts1vS_0.jpg' },
+  { label: '唱片', value: '2234266363446166675', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000003TkJYk3nWUoB_2.jpg' },
+  { label: '音符', value: '224322594261696542', cover: 'https://y.gtimg.cn/music/photo_new/T002R500x500M000003k0x5s4Ale28_1.jpg' },
+]
+
+// 当前选中项的预览图 (用于下方大图预览)
+const selectedCover = computed(() => {
+  const opt = coverOptions.find((o) => o.value === form.default_audio_id)
+  return opt?.cover || ''
+})
 
 // WxPusher 极简推送扫码二维码 (扫码关注后微信内获得 SPT)
 const WXPUSHER_QRCODE =
@@ -312,6 +370,8 @@ async function load() {
     form.follow_device_volume = s.follow_device_volume
     form.dlna_port = s.dlna_port
     form.auto_restart = s.auto_restart
+    form.default_cover_url = s.default_cover_url || ''
+    form.default_audio_id = s.default_audio_id || ''
     form.notify_type = s.notify_type
     form.notify_feishu_webhook = s.notify_feishu_webhook
     form.notify_feishu_secret = s.notify_feishu_secret
@@ -328,7 +388,12 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    await saveSettings({ ...form })
+    const payload = { ...form }
+    // 选择首项"内置默认封面"等同于留空, 提交空串避免误存为具体 audioID
+    if (payload.default_audio_id === '448161862632079419') {
+      payload.default_audio_id = ''
+    }
+    await saveSettings(payload)
     message.success('已保存, 服务正在热重启')
   } catch (e: any) {
     message.error(e.response?.data?.detail || '保存失败')

@@ -18,6 +18,7 @@ from app.engine.const import (
     TRANSPORT_STATUS_OK,
 )
 from app.engine.speaker import SpeakerController
+from app.engine.dlna.cover import resolve_default_cover_url
 
 log = logging.getLogger("miair")
 
@@ -117,7 +118,7 @@ class DLNARenderer:
             
         async with self._lock:
             self.current_uri = uri
-            self.current_uri_metadata = metadata
+            self.current_uri_metadata = self._inject_default_cover(metadata)
             self.transport_state = TRANSPORT_STATE_STOPPED
             # 重置位置
             self._play_start_time = 0.0
@@ -129,6 +130,53 @@ class DLNARenderer:
             self.pre_buffer_func(uri)
         await self.notify_state_change()
         return True
+
+    def _inject_default_cover(self, metadata: str) -> str:
+        """若投送元数据缺少 albumArtURI，注入通用默认封面地址。
+
+        仅在元数据为空、或其中确实没有 upnp:albumArtURI 时兜底，
+        尊重控制端传来的真实封面。返回处理后的元数据。
+        """
+        if not metadata or "albumArtURI" not in metadata:
+            cover_url = resolve_default_cover_url(
+                self.config, self.config.hostname, self.config.dlna_port
+            )
+            log.info(f"[{self.friendly_name}] 元数据缺少封面，注入默认封面: {cover_url}")
+            return self._build_didl_with_cover(metadata, cover_url)
+        return metadata
+
+    @staticmethod
+    def _build_didl_with_cover(metadata: str, cover_url: str) -> str:
+        """在接收到的 DIDL 中注入默认 albumArtURI；若无有效 DIDL 则构造最小可用 DIDL。"""
+        try:
+            root = ET.fromstring(metadata)
+        except ET.ParseError:
+            root = None
+
+        if root is not None:
+            # 命名空间映射，确保注入的 albumArtURI 被正确识别
+            ns = {
+                "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
+            }
+            item = root.find(".//didl:item", ns)
+            if item is None:
+                item = root.find(".//item")  # 无命名空间时退化为本地名查找
+            if item is not None:
+                ET.register_namespace("upnp", ns["upnp"])
+                art = ET.SubElement(item, "{%s}albumArtURI" % ns["upnp"])
+                art.text = cover_url
+                return ET.tostring(root, encoding="unicode")
+
+        # 无有效 DIDL：构造最小可用 DIDL-Lite（含默认封面），保证触屏有图
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+            '<item id="0" parentID="-1" restricted="0">'
+            f'<upnp:albumArtURI>{cover_url}</upnp:albumArtURI>'
+            "</item></DIDL-Lite>"
+        )
 
     async def _check_play_status(self):
         """定期检查播放状态，当歌曲接近结束时主动触发下一曲"""

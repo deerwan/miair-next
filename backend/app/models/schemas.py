@@ -48,6 +48,8 @@ class SettingsPayload(BaseModel):
     default_volume: int | None = Field(default=None, ge=1, le=100)
     follow_device_volume: bool | None = None
     auto_restart: bool | None = None
+    default_cover_url: str | None = None
+    default_audio_id: str | None = None
     notify_type: str | None = None
     notify_feishu_webhook: str | None = None
     notify_feishu_secret: str | None = None
