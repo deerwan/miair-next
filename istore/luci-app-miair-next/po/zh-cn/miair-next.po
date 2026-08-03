@@ -1,56 +1,50 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
 msgid "MiAir Next"
 msgstr "MiAir Next"
 
 msgid "让小米小爱音箱化身 DLNA / AirPlay 接收器，并附带现代化 Web 管理后台。"
 msgstr "让小米小爱音箱化身 DLNA / AirPlay 接收器，并附带现代化 Web 管理后台。"
 
-msgid "状态"
+msgid "官方网站："
+msgstr "官方网站："
+
+msgid "Service Status"
+msgstr "服务状态"
+
+msgid "MiAir Next status:"
+msgstr "MiAir Next 的状态信息如下："
+
+msgid "Setup"
+msgstr "安装配置"
+
+msgid "The free space of Docker is less than 2GB, which may cause the installation to fail."
+msgstr "Docker 可用空间已不足2GB，可能导致安装失败。"
+
+msgid "The following parameters will only take effect during installation or upgrade:"
+msgstr "以下参数只在安装或者升级时才会生效："
+
+msgid "Web Port"
+msgstr "Web 管理端口"
+
+msgid "MiAir Next Web management interface port. The container uses host network for AirPlay/DLNA discovery."
+msgstr "MiAir Next Web 管理界面端口。容器使用 host 网络以支持 AirPlay/DLNA 发现。"
+
+msgid "Config path"
+msgstr "配置路径"
+
+msgid "Image"
+msgstr "固件文件"
+
+msgid "Status"
 msgstr "状态"
 
-msgid "Docker"
-msgstr "Docker"
+msgid "MiAir Next is running"
+msgstr "MiAir Next 运行中"
 
-msgid "Docker 服务"
-msgstr "Docker 服务"
+msgid "MiAir Next is not running"
+msgstr "MiAir Next 未运行"
 
-msgid "容器"
-msgstr "容器"
-
-msgid "运行状态"
-msgstr "运行状态"
-
-msgid "已安装"
-msgstr "已安装"
-
-msgid "未安装"
-msgstr "未安装"
-
-msgid "运行中"
-msgstr "运行中"
-
-msgid "未运行"
-msgstr "未运行"
-
-msgid "已停止"
-msgstr "已停止"
-
-msgid "安装 MiAir Next"
-msgstr "安装 MiAir Next"
-
-msgid "启动"
-msgstr "启动"
-
-msgid "停止"
-msgstr "停止"
-
-msgid "删除容器"
-msgstr "删除容器"
-
-msgid "打开 Web 后台"
-msgstr "打开 Web 后台"
-
-msgid "收集数据..."
-msgstr "收集数据..."
-
-msgid "Script"
-msgstr "脚本"
+msgid "Open MiAir Next"
+msgstr "打开 MiAir Next"

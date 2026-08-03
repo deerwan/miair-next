@@ -10,7 +10,7 @@ endef
 
 LUCI_TITLE:=LuCI support for MiAir Next (DLNA / AirPlay renderer for Xiaomi speakers)
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+docker
+LUCI_DEPENDS:=+lsblk +docker +luci-lib-taskd +luci-lib-docker
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

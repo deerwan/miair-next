@@ -7,11 +7,11 @@ iStoreOS 软件中心里**所有 Docker 类应用**（Jellyfin / Navidrome / Hom
 
 ```
 istore/
-├── luci-app-miair-next/      # OpenWRT 插件（docker 拉起 + 软件中心页面）
+├── luci-app-miair-next/      # OpenWRT 插件（配置页 + Docker 拉起脚本）
 │   ├── Makefile
-│   ├── luasrc/controller/miair-next.lua
-│   ├── luasrc/model/cbi/miair-next/{status,script}.lua
-│   ├── luasrc/view/miair-next/miair-next.htm
+│   ├── luasrc/controller/miair-next.lua       ← cbi 路由 + 状态 API
+│   ├── luasrc/model/cbi/miair-next.lua        ← 全局设置表单
+│   ├── luasrc/view/miair-next/status.htm      ← 状态轮询模板
 │   ├── po/zh-cn/miair-next.po
 │   ├── root/etc/config/miair-next
 │   └── root/usr/share/miair-next/install.sh

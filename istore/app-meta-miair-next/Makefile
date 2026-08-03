@@ -13,7 +13,7 @@ META_AUTHOR:=deerwan
 META_TAGS:=net multimedia
 META_ARCH:=x86_64 aarch64
 META_UCI:=miair-next
-META_LUCI_ENTRY:=/cgi-bin/luci/admin/services/miair-next/client
+META_LUCI_ENTRY:=/cgi-bin/luci/admin/services/miair-next
 META_WEBSITE:=https://github.com/deerwan/miair-next
 META_TUTORIAL:=https://github.com/deerwan/miair-next/blob/main/istore/README-istore.md
 
