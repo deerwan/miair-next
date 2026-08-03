@@ -30,7 +30,7 @@ s.anonymous=true
 o = s:option(Value, "port", translate("Web Port").."<b>*</b>")
 o.default = "8300"
 o.datatype = "port"
-o:description(translate("MiAir Next Web management interface port. The container uses host network for AirPlay/DLNA discovery."))
+o.description = translate("MiAir Next Web management interface port. The container uses host network for AirPlay/DLNA discovery.")
 
 local blocks = miair_next_model.blocks()
 local home = miair_next_model.home()
