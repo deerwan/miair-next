@@ -1,0 +1,15 @@
+{
+    ".url": {
+        "miair-next.Application":
+        {
+            "title": "MiAir Next",
+            "desc": "DLNA & AirPlay Receiver",
+            "icon": "images/{0}.png",
+            "type": "url",
+            "port": "8300",
+            "protocol": "http",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}

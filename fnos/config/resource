@@ -1,0 +1,22 @@
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "MiAir Next",
+                "permission": {
+                    "rw": [
+                        "miair"
+                    ]
+                }
+            }
+        ]
+    },
+    "docker-project": {
+        "projects": [
+            {
+                "name": "miair-next",
+                "path": "docker"
+            }
+        ]
+    }
+}

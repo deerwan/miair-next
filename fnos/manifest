@@ -1,0 +1,15 @@
+appname         = miair-next
+version         = 1.0.0
+display_name    = MiAir Next
+platform        = all
+maintainer      = deerwan
+maintainer_url  = https://lllh.de/
+distributor     = deerwan
+distributor_url = https://github.com/deerwan/miair-next
+desktop_uidir   = ui
+desktop_applaunchname = miair-next.Application
+service_port    = 8300
+default_port    = 8300
+desc            = 让小米小爱音箱化身 DLNA 渲染器与 AirPlay 接收器，支持 Web 管理后台、设备管理、播放控制与日志监控。\n【注意】使用 host 网络模式，占用宿主机 8300 端口，安装前请确保该端口未被占用。
+source          = thirdparty
+checksum        = 

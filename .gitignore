@@ -23,6 +23,9 @@ secret.key
 # 后端静态目录 (由前端构建产物填充)
 backend/app/static/
 
+# fnOS 打包
+fnos/*.fpk
+
 # IDE / 系统
 .idea/
 .vscode/

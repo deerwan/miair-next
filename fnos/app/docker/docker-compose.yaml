@@ -1,0 +1,11 @@
+services:
+  miair-next:
+    image: ${DOCKER_MIRROR}mrdeer1997/miair-next:latest
+    container_name: miair-next
+    network_mode: host
+    environment:
+      - TZ=Asia/Shanghai
+      - MIAIR_WEB_PORT=8300
+    volumes:
+      - ${TRIM_PKGVAR:?}/data:/app/data
+    restart: unless-stopped
