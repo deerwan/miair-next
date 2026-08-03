@@ -1,0 +1,22 @@
+<%+cbi/valueheader%>
+<script type="text/javascript">//<![CDATA[
+	(function(){
+		var baseUrl = '<%=luci.dispatcher.build_url("admin", "services", "miair-next", "status")%>';
+		function refresh(){
+			XHR.get(baseUrl, null, function(x, d){
+				if(!d) return;
+				var html = '';
+				html += '<p><b><%:Docker%>:</b> ' + (d.docker_install ? '<%:已安装%>' : '<%:未安装%>');
+				html += ' &nbsp;|&nbsp; <b><%:Docker 服务%>:</b> ' + (d.docker_start ? '<%:运行中%>' : '<%:未运行%>') + '</p>';
+				html += '<p><b><%:容器%>:</b> ' + (d.container_install ? '<%:已安装%>' : '<%:未安装%>');
+				html += ' &nbsp;|&nbsp; <b><%:运行状态%>:</b> ' + (d.container_running ? '<%:运行中%>' : '<%:已停止%>') + '</p>';
+				document.getElementById('miair_status').innerHTML = html;
+			});
+		}
+		window.setTimeout(refresh, 300);
+	})();
+//]]></script>
+<fieldset class="cbi-section">
+	<p id="miair_status"><em><%:收集数据...%></em></p>
+</fieldset>
+<%+cbi/valuefooter%>

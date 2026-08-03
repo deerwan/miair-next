@@ -11,7 +11,7 @@
       @expand="app.collapsed = false"
     >
       <div class="logo">
-        <span class="logo-icon">🎵</span>
+        <img class="logo-icon" src="/logo.png" alt="logo" />
         <span v-show="!app.collapsed" class="logo-text">MiAir Next</span>
       </div>
       <div class="menu-wrap">
@@ -80,7 +80,9 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
   overflow: hidden;
 }
 .logo-icon {
-  font-size: 22px;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
 }
 .menu-wrap {
   flex: 1;

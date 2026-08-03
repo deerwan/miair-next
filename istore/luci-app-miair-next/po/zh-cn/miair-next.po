@@ -1,0 +1,56 @@
+msgid "MiAir Next"
+msgstr "MiAir Next"
+
+msgid "让小米小爱音箱化身 DLNA / AirPlay 接收器，并附带现代化 Web 管理后台。"
+msgstr "让小米小爱音箱化身 DLNA / AirPlay 接收器，并附带现代化 Web 管理后台。"
+
+msgid "状态"
+msgstr "状态"
+
+msgid "Docker"
+msgstr "Docker"
+
+msgid "Docker 服务"
+msgstr "Docker 服务"
+
+msgid "容器"
+msgstr "容器"
+
+msgid "运行状态"
+msgstr "运行状态"
+
+msgid "已安装"
+msgstr "已安装"
+
+msgid "未安装"
+msgstr "未安装"
+
+msgid "运行中"
+msgstr "运行中"
+
+msgid "未运行"
+msgstr "未运行"
+
+msgid "已停止"
+msgstr "已停止"
+
+msgid "安装 MiAir Next"
+msgstr "安装 MiAir Next"
+
+msgid "启动"
+msgstr "启动"
+
+msgid "停止"
+msgstr "停止"
+
+msgid "删除容器"
+msgstr "删除容器"
+
+msgid "打开 Web 后台"
+msgstr "打开 Web 后台"
+
+msgid "收集数据..."
+msgstr "收集数据..."
+
+msgid "Script"
+msgstr "脚本"

@@ -1,0 +1,5 @@
+config miair-next
+	option 'port' '8300'
+	option 'config_dir' '/mnt/sda3/miair-next'
+	option 'enabled' '1'
+	option 'image' 'mrdeer1997/miair-next:latest'
