@@ -38,6 +38,11 @@ do_install() {
   [ -z "$port" ] && port=8300
   [ -z "$config_dir" ] && config_dir="/root/Configs/MiAirNext"
 
+  if [ -z "$config_dir" ]; then
+      echo "config path is empty!"
+      exit 1
+  fi
+
   istoreenhance_pull ${image_name}
   docker rm -f miair-next
 

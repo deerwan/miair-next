@@ -1,4 +1,4 @@
 config main
 	option 'port' '8300'
-	option 'config_dir' '/mnt/sda3/miair-next'
+#	option 'config_dir' '/mnt/sda3/Configs/MiAirNext'
 	option 'image_name' 'mrdeer1997/miair-next:latest'
