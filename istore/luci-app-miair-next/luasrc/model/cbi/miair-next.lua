@@ -45,7 +45,7 @@ for _, val in pairs(paths) do
 end
 o.default = default_path
 
-o = s:option(Value, "image_name", translate("Image").."<b>*</b>")
+o = s:option(Value, "image_name", translate("Docker Image").."<b>*</b>")
 o.rmempty = false
 o.datatype = "string"
 o.default = "mrdeer1997/miair-next:latest"

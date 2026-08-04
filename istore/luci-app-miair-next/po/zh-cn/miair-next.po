@@ -34,8 +34,8 @@ msgstr "MiAir Next Web 管理界面端口。容器使用 host 网络以支持 Ai
 msgid "Config path"
 msgstr "配置路径"
 
-msgid "Image"
-msgstr "固件文件"
+msgid "Docker Image"
+msgstr "Docker 镜像"
 
 msgid "Status"
 msgstr "状态"
