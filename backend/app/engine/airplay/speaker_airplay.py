@@ -35,6 +35,8 @@ class SpeakerAirPlay:
         self._airplay_active: bool = False  # AirPlay 是否活跃
         self._poll_task: asyncio.Task | None = None  # 状态轮询任务
         self._play_grace_until: float = 0.0  # play 后宽限期
+        self._session_audio_id: str | None = None  # 当前会话匹配到的曲库 audioID (续播复用)
+        self._backfill_task: asyncio.Task | None = None  # 歌词迟到补发任务
 
     async def start(self):
         """启动该音箱的 AirPlay 服务"""
@@ -91,10 +93,14 @@ class SpeakerAirPlay:
             self._stream_url = stream_url
             self._airplay_active = True
             self._play_grace_until = time.time() + 10.0  # 10秒宽限期
-            success = await self.controller.play_url(stream_url)
+            audio_id = await self._resolve_audio_id()
+            success = await self.controller.play_url(stream_url, audio_id)
             if success:
                 log.info(f"AirPlay 音频已在 {self.device_name} 开始播放: {stream_url}")
                 self._start_poll()
+                # 快速路径未拿到 audioID 时启动歌词监听（网易云等发送端元数据迟到，切歌也靠它更新）
+                if audio_id is None and self.config and getattr(self.config, "touchscreen_lyrics", False):
+                    self._backfill_task = asyncio.create_task(self._lyrics_watcher(stream_url))
                 if self.config:
                     default_vol = getattr(self.config, 'default_volume', 0)
                     follow_dev_vol = getattr(self.config, 'follow_device_volume', False)
@@ -116,6 +122,143 @@ class SpeakerAirPlay:
                 log.warning(f"AirPlay 音频在 {self.device_name} 播放失败")
         except Exception as e:
             log.error(f"AirPlay 播放到 {self.device_name} 失败: {e}")
+
+    async def _resolve_audio_id(self) -> str | None:
+        """触屏歌词匹配: 用 DAAP 元数据搜小米曲库换 audioID
+
+        发送端可能在 RECORD 前后才通过 SET_PARAMETER 下发 DAAP 元数据，
+        此处短等最多 1 秒；超时也照常播放（无歌词）不阻塞。
+        未命中返回 None，play_url 会回退到小米云默认封面。
+        """
+        if not (self.config and getattr(self.config, "touchscreen_lyrics", False)):
+            return None
+        meta = None
+        deadline = time.time() + 1.0  # 短宽限等待 DAAP 元数据
+        while time.time() < deadline:
+            if self.airplay_server:
+                meta = self.airplay_server.daap_meta
+            if meta and meta.get("title"):
+                break
+            await asyncio.sleep(0.05)
+        if not meta or not meta.get("title"):
+            log.info(f"AirPlay 未收到 DAAP 歌曲元数据，跳过歌词匹配 ({self.device_name})")
+            return None
+        try:
+            audio_id = await asyncio.wait_for(
+                self.controller.search_audio_id(
+                    meta.get("title", ""), meta.get("artist", ""),
+                    fuzzy_fallback=False),  # DAAP 首条元数据可能是歌词行，不接受模糊回退
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning(f"AirPlay 歌词匹配超时 ({self.device_name})")
+            return None
+        except Exception as e:
+            log.warning(f"AirPlay 歌词匹配失败: {e}")
+            return None
+        if audio_id:
+            self._session_audio_id = audio_id
+            log.info(f"AirPlay 歌词匹配命中: {meta['title']} -> audioID={audio_id}")
+        else:
+            log.info(f"AirPlay 歌词匹配未命中: {meta.get('title')} - {meta.get('artist')}")
+        return audio_id or None
+
+    async def _lyrics_watcher(self, stream_url: str):
+        """歌词会话监听：跟踪 DAAP 到达事件，切歌（含切回上一首）时补发播放指令
+
+        网易云等发送端在播放后几秒才下发元数据（且滚动歌词也走同一通道），
+        切歌/切回时新元数据同样迟到。因此基于不去重的到达事件逐个处理：
+        - 未搜过的标题搜曲库（精确匹配，歌词行不会误命中）；
+        - minm 是歌词行的发送端（如 Apple Music 真歌名拼在 artist 里），
+          额外尝试 derived 候选（从 artist 提取）；
+        - derived 候选按 songloft 的方式允许模糊回退首条结果（曲库无
+          原版时至少能显示翻唱版的歌词，如周杰伦版权不在小米曲库）；
+          minm 标题保持严格，否则滚动歌词行每行都会"命中"不同的歌，
+          导致反复重发播放指令；
+        - 已命中过的歌名缓存在 matched，切回上一首时发送端重发旧歌名，
+          直接用缓存 audioID 补发，无需再搜。
+        任务随会话存活，停止播放时取消。
+        """
+        tried: set[str] = set()       # 搜过未命中的标题（歌词行等），不重复搜索
+        matched: dict[str, str] = {}  # 歌名 -> 命中的 audioID，切回上一首时复用
+        # 制作名单行（网易云/Apple Music/QQ都会发），不是歌名，不搜
+        credit_prefixes = ("作词", "作詞", "作曲", "编曲", "編曲", "演唱", "词：", "詞：", "曲：")
+        last_seq = 0
+        try:
+            while self._airplay_active and self._stream_url == stream_url:
+                await asyncio.sleep(1.0)
+                if not self._airplay_active or self._stream_url != stream_url:
+                    return
+                events = list(self.airplay_server.daap_events) if self.airplay_server else []
+                new_events = [e for e in events if e[0] > last_seq]
+                if not new_events:
+                    continue
+                last_seq = new_events[-1][0]
+                for _, meta in new_events:
+                    title = meta.get("title", "")
+                    if not title:
+                        continue
+                    # 候选歌名: minm 标题（非制作名单行）+ derived（从 artist 提取）
+                    titles = [] if title.startswith(credit_prefixes) else [title]
+                    derived = meta.get("derived") or ""
+                    if derived and derived != title:
+                        titles.append(derived)
+                    hit_id = hit_title = ""
+                    for cand in titles:
+                        # 缓存命中（如歌名重复到达 = 切回上一首）：与当前不同则补发
+                        audio_id = matched.get(cand)
+                        if audio_id:
+                            hit_id, hit_title = audio_id, cand
+                            break
+                        if cand in tried:
+                            continue
+                        tried.add(cand)
+                        try:
+                            audio_id = await asyncio.wait_for(
+                                self.controller.search_audio_id(
+                                    cand, meta.get("artist", ""),
+                                    # derived 是真歌名，按 songloft 方式允许回退首条；
+                                    # minm 可能是歌词行，模糊命中会误判切歌，保持严格
+                                    fuzzy_fallback=(bool(derived) and cand == derived)),
+                                timeout=5.0,
+                            )
+                        except Exception:
+                            continue
+                        if audio_id:
+                            matched[cand] = audio_id
+                            hit_id, hit_title = audio_id, cand
+                            break
+                    if not hit_id or hit_id == self._session_audio_id:
+                        continue  # 未命中或与当前歌词同曲，无需重发
+                    if not self._airplay_active or self._stream_url != stream_url:
+                        return
+                    self._session_audio_id = hit_id
+                    self._play_grace_until = time.time() + 10.0
+                    log.info(f"AirPlay 歌词切换: {hit_title} -> audioID={hit_id} ({self.device_name})")
+                    await self._resend_play(stream_url, hit_id)
+        except asyncio.CancelledError:
+            pass
+
+    async def _resend_play(self, stream_url: str, audio_id: str | None):
+        """重发播放指令并确认音箱真的回来拉流（声音优先于歌词）
+
+        补发后音箱会断开旧连接重拉新 URL，最多等 5 秒确认有拉流连接；
+        若没有（偶尔音箱不重新拉取导致"有歌词封面但无声"），
+        换新 sid 重试一次防缓存；仍失败不阻塞，打断续播轮询会兜底。
+        """
+        await self.controller.play_url(stream_url, audio_id)
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            if not self._airplay_active or self._stream_url != stream_url:
+                return
+            if self.airplay_server and self.airplay_server.stream_has_clients:
+                return
+        if not self._airplay_active or self._stream_url != stream_url:
+            return
+        base_url = stream_url.split('?')[0]
+        fresh_url = f"{base_url}?sid={int(time.time())}"
+        log.warning(f"AirPlay 补发后音箱未拉流，换新 URL 重试: {fresh_url} ({self.device_name})")
+        await self.controller.play_url(fresh_url, audio_id)
 
     @staticmethod
     def _vol_pct_to_db(volume: int) -> float:
@@ -148,6 +291,10 @@ class SpeakerAirPlay:
         """停止音箱播放"""
         self._airplay_active = False
         self._stream_url = ""
+        self._session_audio_id = None
+        if self._backfill_task:
+            self._backfill_task.cancel()
+            self._backfill_task = None
         if self._poll_task:
             self._poll_task.cancel()
             try:
@@ -216,12 +363,12 @@ class SpeakerAirPlay:
                     if self.airplay_server and not self.airplay_server.is_playing:
                         break
 
-                    # 重新播放（使用新 URL 防止音箱缓存旧响应）
+                    # 重新播放（使用新 URL 防止音箱缓存旧响应，复用本会话的 audioID）
                     base_url = self._stream_url.split('?')[0]
                     fresh_url = f"{base_url}?sid={int(time.time())}"
                     log.info(f"[{self.device_name}] AirPlay 自动续播: {fresh_url}")
                     self._play_grace_until = time.time() + 10.0
-                    success = await self.controller.play_url(fresh_url)
+                    success = await self.controller.play_url(fresh_url, self._session_audio_id)
                     if success:
                         log.info(f"[{self.device_name}] AirPlay 续播成功")
                     else:

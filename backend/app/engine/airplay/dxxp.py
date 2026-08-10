@@ -321,3 +321,39 @@ def parse_dxxp(chunk):
         return 'DMAP:\n' + get_next_frame(chunk, '', 0)
 
     # empty line delineate output.
+
+
+# ============================================================
+# DAAP/DMAP TLV 结构化解析 (AirPlay SET_PARAMETER 元数据)
+# ============================================================
+
+_DMAP_DICT_TAGS = ("mdcl", "mlit", "msrv", "mlcl")
+
+
+def parse_dmap(data: bytes) -> dict[str, list[bytes]]:
+    """解析 DAAP/DMAP TLV 数据，返回 {4字符标签: [payload列表]}
+
+    嵌套的 dict/list 类标签 (mdcl/mlit/msrv/mlcl) 会被递归展平。
+    标签语义参考 shairport-sync-metadata-reader:
+    minm=歌名, asar=歌手, asal=专辑。
+    """
+    result: dict[str, list[bytes]] = {}
+    _walk_dmap(data, result)
+    return result
+
+
+def _walk_dmap(data: bytes, out: dict[str, list[bytes]]) -> None:
+    pos, n = 0, len(data)
+    while pos + 8 <= n:
+        tag = data[pos:pos + 4].decode("ascii", errors="replace")
+        length = int.from_bytes(data[pos + 4:pos + 8], "big")
+        pos += 8
+        if pos + length > n:
+            break  # 数据截断，丢弃剩余
+        payload = data[pos:pos + length]
+        pos += length
+        if tag in _DMAP_DICT_TAGS:
+            _walk_dmap(payload, out)
+        else:
+            out.setdefault(tag, []).append(payload)
+

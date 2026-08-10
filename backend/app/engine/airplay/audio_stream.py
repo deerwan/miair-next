@@ -47,7 +47,7 @@ class AudioStreamServer:
         self._active = False
         self._abort = False
         self._session_id = int(time.time())
-        self._has_clients = False
+        self._client_count = 0  # 正在拉流的连接数（计数代替布尔，避免新旧连接交接时互相覆盖）
         self._client_lock = threading.Lock()
 
         self._setup_routes()
@@ -62,6 +62,12 @@ class AudioStreamServer:
     def stream_url(self) -> str:
         ext = "mp3" if self._audio_format == "mp3" else "wav"
         return f"http://{self.hostname}:{self.port}/airplay/stream.{ext}?sid={self._session_id}"
+
+    @property
+    def has_clients(self) -> bool:
+        """是否有音箱正在拉取音频流"""
+        with self._client_lock:
+            return self._client_count > 0
 
     async def start(self):
         self._runner = web.AppRunner(self._app, access_log=None)
@@ -188,24 +194,29 @@ class AudioStreamServer:
                 sock.setsockopt(_sock.IPPROTO_TCP, _sock.TCP_NODELAY, 1)
 
         with self._client_lock:
-            self._has_clients = True
+            self._client_count += 1
         self._abort = False  # 重置中断标志，允许续播
 
         log.info("AirPlay: 音箱开始拉取 WAV 音频流 (零编码延迟)")
 
         # 使用 asyncio.Event 在写入线程和事件循环间通信
+        # 注意: 中断用连接私有的 Event 而非全局 _abort ——
+        # 歌词补发/切歌时音箱断开旧连接后立即重连同一 URL，
+        # 若旧 handler 的清理在新 handler 启动后才执行，全局标志会
+        # 被旧连接置回 True，导致新连接 reader 误退出（有歌词无声）
         loop = asyncio.get_event_loop()
         data_ready = asyncio.Event()
         pending_data: list[bytes] = []
         data_lock = threading.Lock()
         writer_done = False
+        conn_abort = threading.Event()
 
         def _reader_thread():
             """专用线程：从队列批量读取 PCM 并通知事件循环"""
             nonlocal writer_done
             empty_streak = 0
             try:
-                while self._active and not self._abort:
+                while self._active and not conn_abort.is_set():
                     try:
                         chunk = self._audio_queue.get(timeout=0.02)
                         if chunk is None:
@@ -260,9 +271,9 @@ class AudioStreamServer:
         except Exception as e:
             pass
         finally:
-            self._abort = True  # 通知 reader 线程退出
+            conn_abort.set()  # 只中断本连接的 reader，不影响后续重连
             with self._client_lock:
-                self._has_clients = False
+                self._client_count -= 1
 
         try:
             await response.write_eof()
@@ -300,8 +311,9 @@ class AudioStreamServer:
                 sock.setsockopt(_sock.IPPROTO_TCP, _sock.TCP_NODELAY, 1)
 
         with self._client_lock:
-            self._has_clients = True
+            self._client_count += 1
         self._abort = False  # 重置中断标志，允许续播
+        conn_abort = threading.Event()  # 连接私有中断标志（同 WAV 模式说明）
 
         log.info("AirPlay: 音箱开始拉取 MP3 音频流")
 
@@ -343,7 +355,7 @@ class AudioStreamServer:
         except FileNotFoundError:
             log.error("ffmpeg 未找到，无法转码音频流")
             with self._client_lock:
-                self._has_clients = False
+                self._client_count -= 1
             await response.write_eof()
             return response
 
@@ -405,7 +417,7 @@ class AudioStreamServer:
 
         # 从 ffmpeg stdout 读取并写给客户端
         try:
-            while self._active and not self._abort:
+            while self._active and not conn_abort.is_set():
                 audio_data = await asyncio.to_thread(proc.stdout.read, 8192)
                 if not audio_data or self._abort:
                     break
@@ -415,6 +427,7 @@ class AudioStreamServer:
         except Exception as e:
             pass
         finally:
+            conn_abort.set()
             try:
                 proc.terminate()
                 proc.wait(timeout=2)
@@ -426,7 +439,7 @@ class AudioStreamServer:
                     pass
 
         with self._client_lock:
-            self._has_clients = False
+            self._client_count -= 1
 
         try:
             await response.write_eof()

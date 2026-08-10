@@ -50,6 +50,7 @@ class SettingsPayload(BaseModel):
     auto_restart: bool | None = None
     default_cover_url: str | None = None
     default_audio_id: str | None = None
+    touchscreen_lyrics: bool | None = None
     notify_type: str | None = None
     notify_feishu_webhook: str | None = None
     notify_feishu_secret: str | None = None

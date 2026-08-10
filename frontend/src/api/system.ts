@@ -27,6 +27,7 @@ export interface Settings {
   auto_restart: boolean
   default_cover_url: string
   default_audio_id: string
+  touchscreen_lyrics: boolean
   notify_type: string
   notify_feishu_webhook: string
   notify_feishu_secret: string

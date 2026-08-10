@@ -37,6 +37,16 @@
                 <n-form-item label="设备离线自动重启">
                   <n-switch v-model:value="form.auto_restart" />
                 </n-form-item>
+              </n-space>
+            </n-form>
+          </n-tab-pane>
+
+          <n-tab-pane name="touchscreen" tab="触屏显示">
+            <n-alert type="warning" :show-icon="true" :bordered="false" style="margin-top: 8px">
+              实验性功能: 依赖各发送端的元数据格式与小米曲库收录情况, 部分 App/歌曲可能无法显示歌词封面。
+            </n-alert>
+            <n-form :label-placement="labelPlacement" :label-width="labelWidth" :show-feedback="false" style="margin-top: 16px">
+              <n-space vertical :size="18">
                 <n-form-item label="小米云默认封面 (可选)">
                   <div class="field-with-tip">
                     <n-select
@@ -61,6 +71,17 @@
                     </n-space>
                     <n-text v-else depth="3" class="field-tip">
                       小米触屏/带屏音箱走小米云播放时, 触屏显示的封面与歌词来源。需为小米曲库中某首歌的 audioID; 留空使用内置默认。
+                    </n-text>
+                  </div>
+                </n-form-item>
+                <n-form-item label="触屏歌词匹配">
+                  <div class="field-with-tip">
+                    <n-space align="center" :size="8">
+                      <n-switch v-model:value="form.touchscreen_lyrics" />
+                      <n-tag size="small" type="warning" round>Beta</n-tag>
+                    </n-space>
+                    <n-text depth="3" class="field-tip">
+                      DLNA/AirPlay 投送时按控制端传来的歌名/歌手搜小米曲库, 命中则触屏音箱显示该曲歌词与封面; 未命中回退上方的小米云默认封面。AirPlay 元数据迟到的发送端 (如网易云) 会在开播后自动补发。仅对触屏型号生效。
                     </n-text>
                   </div>
                 </n-form-item>
@@ -250,7 +271,7 @@ const labelWidth = computed(() => (isMobile.value ? undefined : 160))
 // tab 与 URL query 同步 (/settings?tab=notify), 刷新不丢位置
 const route = useRoute()
 const router = useRouter()
-const TAB_KEYS = ['playback', 'service', 'notify', 'loginlog', 'other', 'about']
+const TAB_KEYS = ['playback', 'service', 'touchscreen', 'notify', 'loginlog', 'other', 'about']
 const initialTab = String(route.query.tab || '')
 const tab = ref(TAB_KEYS.includes(initialTab) ? initialTab : 'playback')
 
@@ -301,6 +322,7 @@ const form = reactive({
   auto_restart: true,
   default_cover_url: '',
   default_audio_id: '',
+  touchscreen_lyrics: false,
   notify_type: '',
   notify_feishu_webhook: '',
   notify_feishu_secret: '',
@@ -310,7 +332,7 @@ const form = reactive({
 // 仅在 DLNA 使用默认端口 8200 时, 提示可能被 fnOS 自带 DLNA 占用
 const dlnaPortHint = computed(() => {
   if (form.dlna_port !== 8200) return ''
-  return '当前 DLNA 使用默认端口 8200。在 fnOS 系统上，该端口可能被系统自带的 DLNA 服务占用，导致 MiAir 的 DLNA 无法正常启动。可二选一：① 将上方端口改为 8201 或其他空闲端口后保存；② 或关闭 fnOS 自带的 DLNA（入口在 fnOS 设置 → 文件共享协议 → 关闭 DLNA 即可）。'
+  return '端口 8200 可能被 fnOS 自带 DLNA 占用导致启动失败。可改为 8201 等空闲端口, 或在 fnOS 设置 → 文件共享协议中关闭自带 DLNA。'
 })
 
 // 通知方式候选 (青龙式单选)
@@ -372,6 +394,7 @@ async function load() {
     form.auto_restart = s.auto_restart
     form.default_cover_url = s.default_cover_url || ''
     form.default_audio_id = s.default_audio_id || ''
+    form.touchscreen_lyrics = s.touchscreen_lyrics ?? false
     form.notify_type = s.notify_type
     form.notify_feishu_webhook = s.notify_feishu_webhook
     form.notify_feishu_secret = s.notify_feishu_secret

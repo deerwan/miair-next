@@ -65,6 +65,11 @@ class DLNARenderer:
         self._accumulated_time: float = 0.0
         self._track_duration: float = 0.0
 
+        # 当前曲目元数据 (触屏歌词匹配用)：None 表示未搜索，"" 表示搜过未命中
+        self._track_title: str = ""
+        self._track_artist: str = ""
+        self._track_audio_id: str | None = None
+
         # Next URI
         self.next_uri: str = ""
         self.next_uri_metadata: str = ""
@@ -124,12 +129,59 @@ class DLNARenderer:
             self._play_start_time = 0.0
             self._accumulated_time = 0.0
             self._track_duration = self._parse_duration_from_metadata(metadata)
+            # 解析歌名/歌手供触屏歌词匹配，并重置 audioID 缓存
+            self._track_title, self._track_artist = self._parse_track_info(metadata)
+            self._track_audio_id = None
             log.info(f"[{self.friendly_name}] SetAVTransportURI: {uri}")
         # 提前开始缓冲音频（在 Play 之前下载，减少等待）
         if self.pre_buffer_func:
             self.pre_buffer_func(uri)
         await self.notify_state_change()
         return True
+
+    @staticmethod
+    def _parse_track_info(metadata: str) -> tuple[str, str]:
+        """从 DIDL-Lite 元数据解析歌名/歌手 (触屏歌词匹配用)"""
+        if not metadata:
+            return "", ""
+        try:
+            root = ET.fromstring(metadata)
+        except ET.ParseError:
+            return "", ""
+        didl_ns = "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
+        item = root.find(f".//{{{didl_ns}}}item") or root.find(".//item")
+        if item is None:
+            return "", ""
+        ns = {
+            "dc": "http://purl.org/dc/elements/1.1/",
+            "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/",
+        }
+        title = (item.findtext("dc:title", default="", namespaces=ns) or "").strip()
+        artist = (item.findtext("upnp:artist", default="", namespaces=ns) or "").strip()
+        return title, artist
+
+    async def _resolve_audio_id(self) -> str:
+        """解析当前曲目的触屏歌词 audioID (每曲搜一次并缓存；空串回退默认封面)"""
+        if not getattr(self.config, "touchscreen_lyrics", False):
+            return ""
+        if self._track_audio_id is not None:
+            return self._track_audio_id
+        if not self._track_title or not self.speaker:
+            return ""
+        try:
+            self._track_audio_id = await asyncio.wait_for(
+                self.speaker.search_audio_id(self._track_title, self._track_artist),
+                timeout=5.0,
+            )
+        except Exception as e:
+            log.warning(f"[{self.friendly_name}] 触屏歌词搜索失败: {e}")
+            self._track_audio_id = ""
+        if self._track_audio_id:
+            log.info(
+                f"[{self.friendly_name}] 触屏歌词命中: "
+                f"{self._track_title}-{self._track_artist} audioID={self._track_audio_id}"
+            )
+        return self._track_audio_id
 
     def _inject_default_cover(self, metadata: str) -> str:
         """若投送元数据缺少 albumArtURI，注入通用默认封面地址。
@@ -263,9 +315,10 @@ class DLNARenderer:
         if needs_transcode:
             await self.notify_state_change()
 
-        # 发送实际播放指令
+        # 发送实际播放指令 (先解析触屏歌词 audioID，不在锁内等待曲库搜索)
+        audio_id = await self._resolve_audio_id()
         async with self._lock:
-            success = await self.speaker.play_url(play_url)
+            success = await self.speaker.play_url(play_url, audio_id)
             if success:
                 self.transport_state = TRANSPORT_STATE_PLAYING
                 self._play_start_time = time.time()
@@ -425,7 +478,7 @@ class DLNARenderer:
                     if was_playing:
                         await self.speaker.stop()
                     
-                    success = await self.speaker.play_url(seek_url)
+                    success = await self.speaker.play_url(seek_url, self._track_audio_id)
                     if success:
                         self._accumulated_time = seconds
                         
@@ -478,14 +531,20 @@ class DLNARenderer:
             self._track_duration = self._parse_duration_from_metadata(
                 self.current_uri_metadata
             )
-            
+            # 新歌重新解析元数据并重置 audioID 缓存
+            self._track_title, self._track_artist = self._parse_track_info(
+                self.current_uri_metadata
+            )
+            self._track_audio_id = None
+
             if self.speaker:
                 play_url = self.current_uri
                 if self.proxy_url_func:
                     play_url = self.proxy_url_func(self.current_uri, self.udn)
+                audio_id = await self._resolve_audio_id()
                 async with self._lock:
                     self.transport_state = TRANSPORT_STATE_TRANSITIONING
-                success = await self.speaker.play_url(play_url)
+                success = await self.speaker.play_url(play_url, audio_id)
                 async with self._lock:
                     if success:
                         self.transport_state = TRANSPORT_STATE_PLAYING
@@ -531,7 +590,7 @@ class DLNARenderer:
             play_url = self.current_uri
             if self.proxy_url_func:
                 play_url = self.proxy_url_func(self.current_uri, self.udn)
-            await self.speaker.play_url(play_url)
+            await self.speaker.play_url(play_url, await self._resolve_audio_id())
         await self.notify_state_change()
 
     async def set_next_av_transport_uri(self, uri: str, metadata: str = ""):

@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import re
+import time
 
 from app.engine.auth import AuthManager
 from app.engine.config import Config, Speaker
@@ -70,13 +72,18 @@ class SpeakerController:
             return False
         return True
 
-    async def play_url(self, url: str) -> bool:
-        """让音箱播放指定 URL"""
+    async def play_url(self, url: str, audio_id: str | None = None) -> bool:
+        """让音箱播放指定 URL
+
+        audio_id: 小米云路线使用的 audioID (触屏歌词匹配命中的真实 ID)，
+        为空时回退默认 audioID。
+        """
+        effective_audio_id = audio_id or self._default_audio_id()
         try:
             await self.auth.ensure_login()
             if self._should_use_music_api():
                 ret = await self.auth.mina_service.play_by_music_url(
-                    self.device_id, url, audio_id=self._default_audio_id()
+                    self.device_id, url, audio_id=effective_audio_id
                 )
                 log.info(f"play_by_music_url device_id={self.device_id} ret={ret}")
             else:
@@ -96,7 +103,7 @@ class SpeakerController:
                     await self.auth.ensure_login()
                     if self._should_use_music_api():
                         ret = await self.auth.mina_service.play_by_music_url(
-                            self.device_id, url, audio_id=self._default_audio_id()
+                            self.device_id, url, audio_id=effective_audio_id
                         )
                     else:
                         ret = await self.auth.mina_service.play_by_url(self.device_id, url)
@@ -105,6 +112,88 @@ class SpeakerController:
                     log.error(f"重新登录后 play_url 仍然失败: {e2}")
                     return False
             return False
+
+    async def search_audio_id(self, title: str, artist: str = "", fuzzy_fallback: bool = True) -> str:
+        """搜小米官方曲库，返回匹配到的 audioID（供触屏音箱拉取歌词/封面）；未命中返回 ""
+
+        移植自 songloft-plugin-miot (MinaClient.searchAudioId)：优先按「歌名完全相等 +
+        歌手包含匹配」精确命中；精确未命中时按 songloft 的做法回退取搜索结果第一条。
+        fuzzy_fallback=False 供持续搜索场景使用（AirPlay 歌词监听器）：
+        滚动歌词行若模糊命中会被误判为切歌，导致反复重发播放指令。
+        """
+        title = (title or "").strip()
+        if not title:
+            return ""
+        artist = (artist or "").strip()
+        # 发送端常把歌名拼进歌手字段（"周杰伦--告白气球"、"搁浅 — 周杰伦"、
+        # "挚友 · Eric周兴哲"），拼查询词时剔除与歌名重复的部分，
+        # 避免杂质干扰搜索接口；歌手验证仍用原始 artist（双向包含）
+        query_artist = artist
+        for sep in ("--", " — ", " · ", "—", "·"):
+            if sep not in artist:
+                continue
+            parts = [p.strip() for p in artist.split(sep)]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                continue
+            if parts[0].lower() == title.lower():
+                query_artist = parts[1]
+            elif parts[1].lower() == title.lower():
+                query_artist = parts[0]
+            break
+        query = f"{title}-{query_artist}" if query_artist else title
+        try:
+            result = await self.auth.mina_service.mina_request(
+                "/music/search",
+                {
+                    "query": query,
+                    "queryType": "1",
+                    "offset": "0",
+                    "count": "6",
+                    "timestamp": str(int(time.time() * 1000)),
+                },
+            )
+        except Exception as e:
+            log.warning(f"曲库搜索失败 ({query}): {e}")
+            return ""
+
+        song_list = (result or {}).get("data", {}).get("songList") or []
+        if not song_list:
+            log.info(f"曲库搜索未命中 ({query})，回退默认 audioID")
+            return ""
+
+        # 优先「歌名完全相等 + 歌手包含」精确命中；精确未命中时回退策略：
+        # - fuzzy_fallback=True（默认，每首歌只搜一次的一次性场景，同 songloft）：
+        #   取搜索结果第一条，接口按相关度排序，首条通常就是目标歌；
+        # - fuzzy_fallback=False（AirPlay 歌词监听器等持续搜索场景）：
+        #   滚动歌词行若模糊"命中"会被误判为切歌，导致反复重发播放指令、
+        #   音箱频繁重连音频流（卡顿），必须严格拒绝。
+        # 歌手校验双向包含：发送端格式各异（Apple Music "陈奕迅 · 准备中"、
+        # QQ音乐 "周杰伦--青花瓷"、网易云 "梁博/日落大道"），
+        # 曲库歌手名通常包含在发送端字符串里，反之亦然。
+        first_artist = re.split(r"[;；,，&、/·・—]", artist)[0].strip() if artist else ""
+        artist_l = artist.lower()
+        for song in song_list:
+            name = song.get("name") or ""
+            song_artist = (song.get("artist") or {}).get("name") or ""
+            if name.lower() != title.lower():
+                continue
+            if first_artist:  # 无歌手信息时仅凭歌名命中
+                if first_artist.lower() not in song_artist.lower() and not (
+                    song_artist and song_artist.lower() in artist_l
+                ):
+                    continue
+            audio_id = str(song.get("audioID") or "")
+            if audio_id:
+                log.info(f"曲库搜索精确命中 ({query}) audioID={audio_id}")
+                return audio_id
+        if fuzzy_fallback:
+            audio_id = str(song_list[0].get("audioID") or "")
+            if audio_id:
+                first_name = song_list[0].get("name") or ""
+                log.info(f"曲库搜索无精确匹配，回退首条结果 ({query}) {first_name} audioID={audio_id}")
+                return audio_id
+        log.info(f"曲库搜索无匹配 ({query})，回退默认 audioID")
+        return ""
 
     async def pause(self) -> bool:
         """暂停播放"""

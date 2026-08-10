@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import logging
 import os
 import queue
+import re
 import socket
 import struct
 import subprocess
@@ -26,6 +27,7 @@ from Crypto.Cipher import AES
 from app.engine.airplay.audio_stream import AudioStreamServer
 from app.engine.airplay.mdns import AirPlayMDNS
 from app.engine.airplay.playfair import PlayFair
+from app.engine.airplay import dxxp
 
 log = logging.getLogger("miair")
 
@@ -324,6 +326,84 @@ class AP1Security:
         return m64.decode("utf-8")
 
 
+def _strip_artist_suffix(title: str, artist: str) -> str:
+    """剥离发送端拼进歌名字段的歌手/专辑后缀
+
+    QQ音乐等发送端把整串信息塞进 minm：
+      "青花瓷-周杰伦--青花瓷" / "晴天 - 周杰伦 (Jay Chou)"
+    剥离规则（保守，防误伤滚动歌词行）：
+    - artist 字段非空：尾段与 artist 互为包含才剥离；artist 本身
+      可能也是 "歌手--歌名" 等杂质格式，取其任一部分或 derived
+      提取的歌名与尾段互证也算
+    - artist 字段为空：取第一个分隔符之前的部分（此类发送端
+      不发消息/歌词行，无混入风险）
+    """
+    for sep in (" - ", " · ", "-", "·"):
+        idx = title.find(sep)
+        if idx <= 0:
+            continue
+        prefix = title[:idx].strip()
+        suffix = title[idx + len(sep):].strip()
+        if not prefix or not suffix:
+            continue
+        artist = artist.strip()
+        if artist:
+            # 互证候选：artist 整串、按常见分隔符拆出的各段、derived 歌名
+            parts = re.split(r"--+| — | · |—|·", artist)
+            derived = _derive_title_from_artist(artist)
+            names = {artist, *(p.strip() for p in parts if p.strip())}
+            if derived:
+                names.add(derived)
+            if any(n and (n in suffix or suffix in n) for n in names):
+                return prefix
+        else:
+            return prefix
+    return title
+
+
+def _strip_artist_prefix(title: str, artist: str) -> str:
+    """剥离歌名字段开头的歌手前缀（QQ音乐格式: "周杰伦--告白气球"）
+
+    与 _strip_artist_suffix 对称：尾段后缀要求与 artist 互证，
+    前缀则要求与 artist 开头部分互证（artist 可能带专辑尾缀）。
+    """
+    artist = artist.strip()
+    if not artist:
+        return title
+    for sep in ("--", " - ", "—"):
+        idx = title.find(sep)
+        if idx <= 0:
+            continue
+        prefix = title[:idx].strip()
+        rest = title[idx + len(sep):].strip()
+        if not prefix or not rest:
+            continue
+        if prefix == artist or artist.startswith(prefix):
+            return rest
+    return title
+
+
+def _derive_title_from_artist(artist: str) -> str:
+    """从 "歌名 · 歌手" / "歌手--歌名" 等格式的 artist 字段提取歌名候选
+
+    Apple Music / QQ音乐等发送端的 DAAP 从不单独下发真歌名：minm
+    只有滚动歌词行与制作名单，真歌名拼在 asar 字段里
+    （"挚友 · Eric周兴哲"、"搁浅 — 周杰伦"、"周杰伦--告白气球"），
+    提取出来作为候选歌名供曲库搜索验证（假候选不会误命中）。
+    """
+    for sep in (" · ", " — ", "·", "—"):
+        if sep in artist:
+            parts = [p.strip() for p in artist.split(sep)]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return parts[0]
+    # QQ音乐格式: "歌手--歌名"，取 -- 后的部分
+    if "--" in artist:
+        prefix, _, suffix = artist.partition("--")
+        if prefix.strip() and suffix.strip():
+            return suffix.strip()
+    return ""
+
+
 class AirPlayServer:
     """AirPlay 音频接收服务器
 
@@ -374,6 +454,10 @@ class AirPlayServer:
         self._last_volume_db: float = -15.0  # 默认音量
         self._client_name: str = ""  # 连接的客户端设备名称
         self._is_playing: bool = False # 是否正在播放
+        self._daap_meta: dict[str, str] | None = None  # 当前会话 DAAP 元数据 (歌名/歌手/专辑)，None=未收到
+        self._daap_candidates: list[dict[str, str]] = []  # 去重后的候选元数据（供歌词匹配逐个尝试）
+        self._daap_seq = 0  # DAAP 到达序号，单调递增
+        self._daap_events: list[tuple[int, dict[str, str]]] = []  # (seq, meta) 到达事件，含重复歌名
         self._loop: asyncio.AbstractEventLoop | None = None  # 事件循环引用（用于跨线程回调）
 
         # RTP 状态跟踪（用于 FLUSH/RECORD 响应的 RTP-Info 头）
@@ -429,9 +513,77 @@ class AirPlayServer:
         return socket.inet_pton(socket.AF_INET, self.ipv4)
 
     @property
+    def daap_meta(self) -> dict[str, str] | None:
+        """当前 AirPlay 会话的 DAAP 元数据 (title/artist/album)，未收到为 None"""
+        return self._daap_meta
+
+    @property
+    def daap_candidates(self) -> list[dict[str, str]]:
+        """本会话收到的去重 DAAP 元数据候选列表
+
+        部分发送端（如网易云 iOS）会在播放后几秒才下发元数据，
+        且滚动歌词也走同一通道，因此收集全部候选供歌词匹配逐个尝试：
+        小米曲库搜索要求歌名精确相等，歌词行不会误命中。
+        """
+        return self._daap_candidates
+
+    @property
+    def daap_events(self) -> list[tuple[int, dict[str, str]]]:
+        """DAAP 标题到达事件列表 (seq, meta)，seq 单调递增，含重复歌名
+
+        与去重的候选列表不同，这里保留每次到达（包括重复歌名），
+        供歌词监听检测"切回上一首"：发送端切回时会重发旧歌名。
+        """
+        return self._daap_events
+
+    def _parse_dmap_metadata(self, body: bytes) -> None:
+        """解析 SET_PARAMETER 下发的 DAAP 元数据（触屏歌词匹配用）"""
+        try:
+            tags = dxxp.parse_dmap(body)
+        except Exception as e:
+            log.warning(f"DAAP 元数据解析失败: {e}")
+            return
+
+        def _first(tag: str) -> str:
+            values = tags.get(tag)
+            return values[0].decode("utf-8", errors="replace").strip() if values else ""
+
+        raw_title = _first("minm")
+        if not raw_title:
+            return
+        artist = _first("asar")
+        # 部分发送端把歌手拼在歌名里（QQ音乐: "青花瓷 - 周杰伦"；
+        # Apple Music: "连名带姓 · 季末"），剥离歌手后缀还原真歌名
+        title = _strip_artist_suffix(raw_title, artist)
+        title = _strip_artist_prefix(title, artist)
+        meta = {"title": title, "artist": artist, "album": _first("asal"),
+                "derived": _derive_title_from_artist(artist)}
+        if self._daap_meta is None:
+            self._daap_meta = meta
+            shown = f"{raw_title} → {title}" if title != raw_title else title
+            log.info(f"AirPlay DAAP 元数据: {shown} - {meta['artist']} ({meta['album']})")
+        # 收集去重候选，供歌词匹配逐个尝试；滚动歌词会产生大量唯一候选，
+        # 超出上限时裁掉旧条目，保留最近 32 条（新歌元数据总在尾部）
+        if not any(c["title"] == title for c in self._daap_candidates):
+            self._daap_candidates.append(meta)
+            if len(self._daap_candidates) > 64:
+                del self._daap_candidates[:32]
+        # 记录到达事件（不去重）：切回上一首时发送端会重发旧歌名，
+        # 候选列表去重后看不见，只有到达事件能检测"切回"
+        self._daap_seq += 1
+        self._daap_events.append((self._daap_seq, meta))
+        if len(self._daap_events) > 128:
+            del self._daap_events[:64]
+
+    @property
     def is_playing(self) -> bool:
         """是否正在播放"""
         return self._is_playing
+
+    @property
+    def stream_has_clients(self) -> bool:
+        """是否有音箱正在拉取音频流"""
+        return self._stream_server.has_clients
 
     @property
     def client_name(self) -> str:
@@ -598,6 +750,10 @@ class AirPlayServer:
 
                 elif method == "ANNOUNCE":
                     self._is_playing = True
+                    self._daap_meta = None  # 新会话，清除上一会话元数据
+                    self._daap_candidates = []
+                    self._daap_seq = 0
+                    self._daap_events = []
                     self._handle_announce(sock, headers, body, cseq)
 
                 elif method == "SETUP":
@@ -621,6 +777,10 @@ class AirPlayServer:
                 elif method == "TEARDOWN":
                     self._is_playing = False
                     self._client_name = ""
+                    self._daap_meta = None
+                    self._daap_candidates = []
+                    self._daap_seq = 0
+                    self._daap_events = []
                     self._stream_server.stop_streaming()
                     teardown_done = True
                     self._safe_call_on_play_stop()
@@ -674,7 +834,10 @@ class AirPlayServer:
 
                 elif method == "SET_PARAMETER":
                     content_type = headers.get("Content-Type", "")
-                    if not content_type.startswith("image/"):
+                    if "dmap-tagged" in content_type:
+                        # DAAP 元数据（歌名/歌手/专辑），触屏歌词匹配用
+                        self._parse_dmap_metadata(body)
+                    elif not content_type.startswith("image/"):
                         body_str = body.decode("utf-8", errors="replace")
                         
                         # 解析音量: volume: -15.00
@@ -711,6 +874,10 @@ class AirPlayServer:
             # 无论正常 TEARDOWN 还是异常断开，都要重置播放状态
             self._is_playing = False
             self._client_name = ""
+            self._daap_meta = None
+            self._daap_candidates = []
+            self._daap_seq = 0
+            self._daap_events = []
             # 关闭所有 socket（RTP、RTCP control、timing）
             for s in (rtp_socket, control_socket, timing_socket):
                 if s:
