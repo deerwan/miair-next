@@ -50,6 +50,5 @@ o.rmempty = false
 o.datatype = "string"
 o.default = "mrdeer1997/miair-next:latest"
 o:value("mrdeer1997/miair-next:latest", "mrdeer1997/miair-next:latest")
-o:value("ghcr.io/deerwan/miair-next:latest", "ghcr.io/deerwan/miair-next:latest")
 
 return m
