@@ -1,3 +1,7 @@
+--[[
+LuCI - Lua Configuration Interface
+]]--
+
 local taskd = require "luci.model.tasks"
 local docker = require "luci.docker"
 local miair_next_model = require "luci.model.miair-next"

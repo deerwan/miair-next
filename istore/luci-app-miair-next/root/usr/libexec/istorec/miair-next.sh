@@ -43,7 +43,7 @@ do_install() {
       exit 1
   fi
 
-  istoreenhance_pull ${image_name}
+  istoreenhance_pull "$image_name"
   docker rm -f miair-next
 
   mkdir -p "$config_dir"
