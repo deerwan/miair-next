@@ -18,8 +18,12 @@ import base64
 import socket
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, "/Users/deer/Desktop/未命名文件夹 3/miair-next/backend")
+# 脚本位于 backend/scripts/，backend 是其上级目录。
+# 用 __file__ 动态推导，避免把本机绝对路径写死到仓库里。
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND_DIR))
 
 from Crypto.PublicKey import RSA
 

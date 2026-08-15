@@ -25,3 +25,9 @@ venv/
 .DS_Store
 *.md
 !README.md
+
+# 开发 / 调试脚本不进生产镜像
+backend/scripts/
+
+# 测试代码不进生产镜像
+backend/tests/
