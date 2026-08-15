@@ -25,9 +25,12 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-from Crypto.PublicKey import RSA
+from Crypto.PublicKey import RSA  # noqa: E402
 
-from app.engine.airplay.server import AIRPORT_PRIVATE_KEY, AirPlayServer
+from app.engine.airplay.server import (  # noqa: E402
+    AIRPORT_PRIVATE_KEY,
+    AirPlayServer,
+)
 
 # AirPlay 公钥（与私钥配对）：iOS 端用它对 Apple-Response 做校验
 AIRPORT_PUBLIC_KEY = RSA.import_key(AIRPORT_PRIVATE_KEY).publickey()
