@@ -302,12 +302,16 @@ class AP1Security:
         data = base64.b64decode(apple_challenge)
         data = data.ljust(32, b"\0")
 
+        # PKCS#1 v1.5 风格填充：0x00 0x01 || 0xFF*(k-3-len(D)) || 0x00 || D
+        # 其中 D = challenge(32) || request_host(4) || device_id(6)，共 42 字节。
+        # 注意：0xFF 填充长度必须把 request_host 与 device_id 一并计入 D，
+        # 否则 message 会超过 RSA 密钥长度 (256 字节)，导致生成的 Apple-Response
+        # 无法被 Apple 设备用公钥验证 -> 设备可见但连接失败 (Issue #5)。
+        signed_data = data + request_host + device_id  # 32 + 4 + 6 = 42
         message = b"\x00\x01"
-        message += b"\xFF" * (RSA_KEYLEN - 32 - 3)
+        message += b"\xFF" * (RSA_KEYLEN - 3 - len(signed_data))
         message += b"\x00"
-        message += data
-        message += request_host
-        message += device_id
+        message += signed_data
 
         message_bigint = int.from_bytes(message, "big")
         key = RSA.import_key(AIRPORT_PRIVATE_KEY)
@@ -493,11 +497,25 @@ class AirPlayServer:
         return int(self.device_id.replace(":", ""), base=16).to_bytes(6, "big")
 
     def _get_ipv4(self) -> str:
-        """获取本机 IPv4 地址"""
+        """获取本机 IPv4 地址。
+
+        优先顺序：传入的 hostname -> MIAIR_HOSTNAME 环境变量 -> 自动探测。
+        必须与 AirPlayMDNS 中广播的 IP 保持一致，否则 AirPlay 1 的 Apple-Response
+        校验会因 IP 不匹配而失败（设备可见但连接失败）。
+        """
+        if self.hostname and self.hostname not in ("0.0.0.0", "127.0.0.1"):
+            # 若 hostname 是合法 IP 则直接使用；否则继续向下探测，
+            # 与 mdns 中的 _get_ip 保持一致。
+            try:
+                socket.inet_pton(socket.AF_INET, self.hostname)
+                return self.hostname
+            except (OSError, ValueError):
+                pass
+
         hostname = os.getenv("MIAIR_HOSTNAME", "")
         if hostname and hostname != "127.0.0.1":
             return hostname
-        
+
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
