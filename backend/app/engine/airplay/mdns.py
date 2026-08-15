@@ -15,6 +15,15 @@ from zeroconf._exceptions import ServiceNameAlreadyRegistered, NonUniqueNameExce
 log = logging.getLogger("miair")
 
 
+def _is_ip_address(value: str) -> bool:
+    """判断字符串是否为 IPv4 地址"""
+    try:
+        socket.inet_aton(value)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 class AirPlayMDNS:
     """AirPlay mDNS 广播器"""
 
@@ -36,6 +45,18 @@ class AirPlayMDNS:
         self._thread = threading.Thread(target=self._run_mdns, daemon=True)
         self._thread.start()
 
+    def _get_server_name(self) -> str:
+        """生成本机合法的 mDNS server 主机名。
+
+        注意：mDNS 的 server 字段必须是合法主机名，不能包含 IP 地址。
+        若直接用 IP 拼接成 "192.168.1.10.local." 会被 iOS 判定为非法而无法连接。
+        """
+        if self.hostname and self.hostname not in ("0.0.0.0", "127.0.0.1") and not _is_ip_address(self.hostname):
+            base = self.hostname
+        else:
+            base = f"miair-{self.device_id.replace(':', '')}"
+        return f"{base}.local."
+
     def _run_mdns(self):
         """在独立线程中运行 mDNS"""
         try:
@@ -52,6 +73,9 @@ class AirPlayMDNS:
             else:
                 self.zeroconf = Zeroconf(ip_version=IPVersion.All)
                 log.info("创建新的 Zeroconf 实例")
+
+            # 生成合法 mDNS server 主机名（不得为 IP）
+            server_name = self._get_server_name()
 
             # 构建设备 ID (去掉冒号的 MAC 地址格式，用于 RAOP 服务名)
             device_id_clean = self.device_id.replace(":", "")
@@ -91,7 +115,7 @@ class AirPlayMDNS:
                 addresses=[ip_bytes],
                 port=self.rtsp_port,
                 properties=airplay_properties,
-                server=f"{self.hostname}.local.",
+                server=server_name,
             )
 
             # ===== RAOP 服务 (_raop._tcp) =====
@@ -121,21 +145,25 @@ class AirPlayMDNS:
                 addresses=[ip_bytes],
                 port=self.rtsp_port,
                 properties=raop_properties,
-                server=f"{self.hostname}.local.",
+                server=server_name,
             )
 
-            # 只注册 RAOP 服务，强制 iOS 使用 AirPlay 1 (RAOP) 协议
-            # 如果同时注册 _airplay._tcp，iOS 会优先选择 AirPlay 2
+            # 同时注册 _airplay._tcp 与 _raop._tcp 两个服务。
+            # 仅注册 RAOP 时，较新版本 iOS 的 Apple Music 会直接跳过连接
+            # （表现为设备可见但点击后无 RTSP 连接）。两个服务都注册可提高兼容性，
+            # 二者共用同一 RTSP 端口和 server 名，iOS 仍可走 AirPlay 1 (RAOP) 音频流。
             registered = False
             for attempt in range(3):
                 try:
+                    self.zeroconf.register_service(self.airplay_info, allow_name_change=True)
+                    log.info(f"AirPlay 服务已注册: {self.device_name}._airplay._tcp.local.")
                     self.zeroconf.register_service(self.raop_info, allow_name_change=True)
                     log.info(f"RAOP 服务已注册: {device_id_clean}@{self.device_name}._raop._tcp.local.")
                     registered = True
                     break
                 except (ServiceNameAlreadyRegistered, NonUniqueNameException) as e:
                     if attempt < 2:
-                        log.warning(f"RAOP 服务名冲突 ({type(e).__name__})，等待 2 秒后重试 ({attempt+1}/3)...")
+                        log.warning(f"mDNS 服务名冲突 ({type(e).__name__})，等待 2 秒后重试 ({attempt+1}/3)...")
                         # 旧进程重启时 zeroconf 可能还未清理，等待旧服务超时
                         try:
                             self.zeroconf.unregister_all_services()
@@ -145,7 +173,7 @@ class AirPlayMDNS:
                     else:
                         raise
             if not registered:
-                log.error(f"RAOP 服务注册失败: {device_id_clean}@{self.device_name}._raop._tcp.local.")
+                log.error(f"mDNS 服务注册失败: {self.device_name}")
                 return
 
             log.info(f"AirPlay 音频接收器 mDNS 广播已启动")
@@ -166,13 +194,14 @@ class AirPlayMDNS:
         """停止 mDNS 广播"""
         self._running = False
         if self.zeroconf:
-            if self.raop_info:
-                try:
-                    if self.zeroconf and not self.zeroconf.loop.is_closed():
-                        self.zeroconf.unregister_service(self.raop_info)
-                        log.info(f"RAOP 服务已注销: {self.device_name}")
-                except Exception as e:
-                    log.error(f"注销 mDNS 服务失败: {e}")
+            for info in (self.airplay_info, self.raop_info):
+                if info:
+                    try:
+                        if self.zeroconf and not self.zeroconf.loop.is_closed():
+                            self.zeroconf.unregister_service(info)
+                    except Exception as e:
+                        log.error(f"注销 mDNS 服务失败: {e}")
+            log.info(f"AirPlay 服务已注销: {self.device_name}")
         # 注意：不关闭共享的 zeroconf，只关闭自己创建的
         if self.zeroconf and not self.shared_zeroconf:
             try:
