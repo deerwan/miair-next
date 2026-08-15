@@ -17,15 +17,13 @@ import asyncio
 import base64
 import socket
 import sys
-import threading
 import time
 
 sys.path.insert(0, "/Users/deer/Desktop/未命名文件夹 3/miair-next/backend")
 
 from Crypto.PublicKey import RSA
 
-from app.engine.airplay.server import AirPlayServer, AP1Security, AIRPORT_PRIVATE_KEY
-
+from app.engine.airplay.server import AIRPORT_PRIVATE_KEY, AirPlayServer
 
 # AirPlay 公钥（与私钥配对）：iOS 端用它对 Apple-Response 做校验
 AIRPORT_PUBLIC_KEY = RSA.import_key(AIRPORT_PRIVATE_KEY).publickey()

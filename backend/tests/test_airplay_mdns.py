@@ -7,13 +7,8 @@
 - server._get_ipv4 与 mdns 广播 IP 来源一致（Apple-Response 校验的前提）
 """
 
-import os
-
-import pytest
-
 from app.engine.airplay.mdns import AirPlayMDNS, _is_ip_address
 from app.engine.airplay.server import AirPlayServer
-
 
 # ---------------------------------------------------------------------------
 # 模块级辅助函数
@@ -147,10 +142,12 @@ def test_ipv4_bin_matches_ipv4():
 # ---------------------------------------------------------------------------
 
 def test_apple_response_is_standard_rsa_signature():
-    from Crypto.PublicKey import RSA
-    from app.engine.airplay.server import AP1Security, AIRPORT_PRIVATE_KEY
-
     import socket as _s
+
+    from Crypto.PublicKey import RSA
+
+    from app.engine.airplay.server import AIRPORT_PRIVATE_KEY, AP1Security
+
     challenge = __import__("base64").b64encode(b"\x11\x22\x33\x44" * 8).decode()
     request_host = _s.inet_aton("127.0.0.1")
     device_id = bytes.fromhex("AABBCCDDEEFF")
@@ -175,10 +172,11 @@ def test_apple_response_is_standard_rsa_signature():
 
 
 def test_apple_response_message_is_256_bytes():
+    import socket as _s
     from base64 import b64decode, b64encode
+
     from app.engine.airplay.server import AP1Security
 
-    import socket as _s
     challenge = b64encode(b"\x11\x22\x33\x44" * 8).decode()
     request_host = _s.inet_aton("127.0.0.1")
     device_id = bytes.fromhex("AABBCCDDEEFF")
