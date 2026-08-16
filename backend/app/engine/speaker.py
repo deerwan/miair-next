@@ -68,6 +68,11 @@ class SpeakerController:
         return self.speaker.did
 
     def _should_use_music_api(self) -> bool:
+        # 型号在 NEED_USE_PLAY_MUSIC_API 白名单时优先走 play_by_music_url，
+        # 使 default_audio_id 指定的封面/触屏歌词在触屏音箱生效。
+        # 兼容模式仅影响非白名单设备，不再覆盖白名单型号的 music api 路径。
+        if self.speaker.hardware and self.speaker.hardware.upper() in NEED_USE_PLAY_MUSIC_API:
+            return True
         if self.speaker.is_compatibility_mode():
             return False
         return True

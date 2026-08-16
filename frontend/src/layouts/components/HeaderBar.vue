@@ -8,7 +8,7 @@
           <template #icon>
             <n-icon size="18"><PersonCircleOutline /></n-icon>
           </template>
-          {{ auth.username || 'admin' }}
+          {{ auth.username || '未登录' }}
         </n-button>
       </n-dropdown>
     </div>

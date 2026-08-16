@@ -92,6 +92,17 @@ async def rename_speaker(
             log.info(f"已更新渲染器名称: {payload.dlna_name} (did={did})")
             break
 
+    # 同步更新 AirPlay 广播名：停止旧 mDNS 广播并按新名重建，
+    # 让手机搜索到的设备名与 Web 后台一致（否则缓存旧名）。
+    if orch.airplay_manager:
+        sap = orch.airplay_manager.speaker_airplays.get(did)
+        if sap:
+            try:
+                await sap.rename(payload.dlna_name)
+                log.info(f"已更新 AirPlay 广播名: {payload.dlna_name} (did={did})")
+            except Exception as e:
+                log.error(f"更新 AirPlay 广播名失败 (did={did}): {e}")
+
     return {"ok": True, "dlna_name": payload.dlna_name}
 
 

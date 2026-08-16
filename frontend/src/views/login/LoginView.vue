@@ -25,7 +25,7 @@ const router = useRouter()
 const message = useMessage()
 const auth = useAuthStore()
 
-const username = ref('admin')
+const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
@@ -48,7 +48,7 @@ async function submit() {
   try {
     const { access_token } = await login(username.value, password.value)
     auth.setToken(access_token)
-    auth.username = username.value
+    await auth.refreshUser()
     message.success('登录成功')
     router.replace({ name: 'dashboard' })
   } catch (e: any) {

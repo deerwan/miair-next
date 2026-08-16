@@ -24,8 +24,6 @@ class SpeakerAirPlay:
         self.hostname = hostname
         self.controller = controller
         self.speaker = controller.speaker
-        # 使用音箱名称作为 AirPlay 设备名
-        self.device_name = self.speaker.get_dlna_name()
         self.shared_zeroconf = shared_zeroconf
         self.config = config
         self.airplay_server: AirPlayServer | None = None
@@ -37,6 +35,29 @@ class SpeakerAirPlay:
         self._play_grace_until: float = 0.0  # play 后宽限期
         self._session_audio_id: str | None = None  # 当前会话匹配到的曲库 audioID (续播复用)
         self._backfill_task: asyncio.Task | None = None  # 歌词迟到补发任务
+
+    @property
+    def device_name(self) -> str:
+        """动态读取当前 AirPlay 广播名。
+
+        设备名应始终跟随 dlna_name（用户可在 Web 后台修改），
+        而非在构造时冻结。借鉴 airplay2-receiver 的 update_service 思路：
+        名称是广播的属性，可在运行时被刷新后重新注册生效。
+        """
+        return self.speaker.get_dlna_name()
+
+    async def rename(self, new_name: str):
+        """重命名后重建该音箱的 AirPlay 广播。
+
+        先停掉旧广播（mdns.stop 会显式 unregister_service 注销旧记录，
+        避免 iOS 缓存里残留旧名），再按新名重新注册。
+        相比单纯改 friendly_name，这样才能让手机搜到的名字真正更新。
+        """
+        log.info(f"AirPlay 重命名: {self.device_name} -> {new_name}")
+        await self.stop()
+        # 更新底层 dlna_name，使后续 device_name 动态属性返回新值
+        self.speaker.dlna_name = new_name
+        await self.start()
 
     async def start(self):
         """启动该音箱的 AirPlay 服务"""
