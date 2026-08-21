@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# 首次安装初始化：确保 miair-next 配置 section 存在，避免旧版本残留配置导致异常
+if [ -z "$(uci -q get miair-next.@main[0])" ]; then
+	uci -q batch <<-EOF >/dev/null
+		add miair-next main
+		set miair-next.@main[0].port='8300'
+		set miair-next.@main[0].image_name='mrdeer1997/miair-next:latest'
+		commit miair-next
+	EOF
+fi
+
+exit 0

@@ -16,7 +16,7 @@ local container_running = container_status == "running"
 </div>
 <%
 if container_running then
-    local port=util.trim(util.exec("/usr/libexec/istorec/miair-next.sh port"))
+    local port=util.trim(util.exec("uci get miair-next.@main[0].port 2>/dev/null"))
     if port == "" then
         port="8300"
     end

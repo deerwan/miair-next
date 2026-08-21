@@ -1,99 +1,75 @@
 #!/bin/sh
-# Author: deer
 
-ACTION=${1}
-shift 1
+# This is free software, licensed under the Apache License, Version 2.0 .
 
-istoreenhance_pull() {
-  local image_name="$1"
-  echo "docker pull ${image_name}"
-  docker pull "$image_name"
-  if [ $? -ne 0 ]; then
-    local isInstall=$(command -v iStoreEnhance)
-    local isRun=$(pgrep iStoreEnhance)
-    if [ -n "$isRun" ]; then
-      local registry_mirror=$(docker info 2>/dev/null | awk -F': ' '/Registry Mirrors:/ {found=1; next} found && NF {if ($0 ~ /registry.linkease.net/) {print; exit}}')
-      if [[ -n "$registry_mirror" ]]; then
-        echo "istoreenhance_pull failed"
-      else
-        echo "download failed, not found registry.linkease.net"
-      fi
-    else
-      if [ -z "$isInstall" ]; then
-        echo "download failed, install istoreenhance to speedup, \"https://doc.linkease.com/zh/guide/istore/software/istoreenhance.html\""
-      else
-        echo "download failed, enable istoreenhance to speedup"
-      fi
-    fi
+NAME=mrdeer1997/miair-next
+config_load miair-next
+config_get port main port
+config_get image_name main image_name
+config_get config_path main config_path
+
+LOGTIME=$(date "+%Y-%m-%d %H:%M:%S")
+
+if [ -z "$port" ]; then
+    port=8300
+fi
+
+if [ -z "$image_name" ]; then
+    image_name=$NAME:latest
+fi
+
+if [ -z "$config_path" ]; then
+    echo "[$LOGTIME] config_path 未配置，请先在 iStore 中设置配置目录" >&2
     exit 1
-  fi
+fi
+
+setup() {
+    echo "[$LOGTIME] Start pulling image $image_name"
+    docker pull $image_name
+    echo "[$LOGTIME] Image pull completed"
 }
 
-do_install() {
-  local port=`uci get miair-next.@main[0].port 2>/dev/null`
-  local config_dir=`uci get miair-next.@main[0].config_dir 2>/dev/null`
-  local image_name=`uci get miair-next.@main[0].image_name 2>/dev/null`
-
-  [ -z "$image_name" ] && image_name="mrdeer1997/miair-next:latest"
-  [ -z "$port" ] && port=8300
-  [ -z "$config_dir" ] && config_dir="/root/Configs/MiAirNext"
-
-  if [ -z "$config_dir" ]; then
-      echo "config path is empty!"
-      exit 1
-  fi
-
-  istoreenhance_pull "$image_name"
-  docker rm -f miair-next
-
-  mkdir -p "$config_dir"
-
-  local cmd="docker run --restart=unless-stopped -d --name miair-next --network host --dns=127.0.0.1"
-
-  local tz="`uci get system.@system[0].zonename | sed 's/ /_/g'`"
-  [ -z "$tz" ] || cmd="$cmd -e TZ=$tz"
-
-  cmd="$cmd \
-    -e MIAIR_WEB_PORT=$port \
-    -e MIAIR_GITHUB_REPO=deerwan/miair-next \
-    -v \"$config_dir:/app/data\" \
-    \"$image_name\""
-
-  echo "$cmd"
-  eval "$cmd"
+status() {
+    echo $(docker ps --format '{{.Names}}\t{{.Status}}' | grep "^miair-next\t" | awk '{print $2}')
 }
 
-usage() {
-  echo "usage: $0 sub-command"
-  echo "where sub-command is one of:"
-  echo "      install                Install the MiAir Next"
-  echo "      upgrade                Upgrade the MiAir Next"
-  echo "      rm/start/stop/restart  Remove/Start/Stop/Restart the MiAir Next"
-  echo "      status                 MiAir Next status"
-  echo "      port                   MiAir Next port"
+start() {
+    # 确保只存在一个实例
+    stop
+    setup
+    echo "[$LOGTIME] Start creating container..."
+    docker run -d \
+        --name=miair-next \
+        --network=host \
+        --restart=unless-stopped \
+        -v "$config_path":/config \
+        -v /mnt:/mnt \
+        $(mountpoint -q /mnt && echo "--mount type=bind,source=/mnt,target=/mnt,bind-propagation=rslave") \
+        -e TZ=Asia/Shanghai \
+        -e PORT=$port \
+        $image_name
+    echo "[$LOGTIME] Container miair-next created"
 }
 
-case ${ACTION} in
-  "install")
-    do_install
-  ;;
-  "upgrade")
-    do_install
-  ;;
-  "rm")
-    docker rm -f miair-next
-  ;;
-  "start" | "stop" | "restart")
-    docker ${ACTION} miair-next
-  ;;
-  "status")
-    docker ps --all -f 'name=^/miair-next$' --format '{{.State}}'
-  ;;
-  "port")
-    uci get miair-next.@main[0].port 2>/dev/null || echo "8300"
-  ;;
-  *)
-    usage
-    exit 1
-  ;;
+stop() {
+    echo "[$LOGTIME] Stopping and removing container miair-next (if exists)..."
+    docker stop miair-next >/dev/null 2>&1
+    docker rm -f miair-next >/dev/null 2>&1
+    echo "[$LOGTIME] Container miair-next stopped and removed"
+}
+
+case "$1" in
+    "status")
+        status
+        ;;
+    "start")
+        start
+        ;;
+    "stop")
+        stop
+        ;;
+    "upgrade")
+        stop
+        start
+        ;;
 esac

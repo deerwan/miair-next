@@ -2,17 +2,11 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=1.0.2-r20260811
-PKG_RELEASE:=
+PKG_VERSION:=1.0.3-r20260821
+PKG_RELEASE:=1
 
 define Package/$(PKG_NAME)/conffiles
 /etc/config/miair-next
-endef
-
-define Package/$(PKG_NAME)/postinst
-#!/bin/sh
-chmod +x /usr/libexec/istorec/miair-next.sh
-exit 0
 endef
 
 define Package/$(PKG_NAME)/prerm

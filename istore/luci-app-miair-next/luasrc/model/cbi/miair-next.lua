@@ -39,7 +39,7 @@ o.description = translate("MiAir Next Web management interface port. The contain
 local blocks = miair_next_model.blocks()
 local home = miair_next_model.home()
 
-o = s:option(Value, "config_dir", translate("Config path").."<b>*</b>")
+o = s:option(Value, "config_path", translate("Config path").."<b>*</b>")
 o.rmempty = false
 o.datatype = "string"
 

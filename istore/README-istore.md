@@ -33,7 +33,7 @@
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `port` | `8300` | Web 管理后台端口（host 网络下直接监听宿主机） |
-| `config_dir` | `/mnt/sda3/Configs/MiAirNext` | 数据持久化目录（管理员账号 / JWT 密钥 / 音箱配置） |
+| `config_path` | `/mnt/sda3/Configs/MiAirNext` | 数据持久化目录（管理员账号 / JWT 密钥 / 音箱配置） |
 | `image_name` | `mrdeer1997/miair-next:latest` | 镜像地址 |
 
 修改后，回到状态页点击 **安装 MiAir Next** 重新拉起容器即可生效。
