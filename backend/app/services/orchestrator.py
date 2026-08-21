@@ -36,6 +36,8 @@ class Orchestrator:
         self.dlna_running = False
         self.airplay_manager: AirPlayManager | None = None
         self._device_check_task: asyncio.Task | None = None
+        # 重启串行化: 防止连续扫码/保存设置触发多个 restart 并发互相踩踏
+        self._restart_lock = asyncio.Lock()
 
     def get_renderer_by_did(self, did: str) -> DLNARenderer | None:
         """根据 DID 获取渲染器"""
@@ -192,17 +194,22 @@ class Orchestrator:
 
     async def restart_dlna_services(self):
         """重启 DLNA 服务 (用户通过 Web 修改配置后调用)"""
-        await self._stop_dlna_services()
-        # 先停掉旧的 AirPlay, 避免重启失败时旧实例带着过期音箱残留
-        if self.airplay_manager:
-            await self.airplay_manager.stop()
-            self.airplay_manager = None
-        # 关闭并重新初始化 auth, 确保账号切换生效
-        await self.auth.close()
-        self.auth = AuthManager(self.config)
-        self.speaker_manager = SpeakerManager(self.config, self.auth)
-        # _start_dlna_services 内部已重启 AirPlay (先停旧再启新), 无需再次重启
-        await self._start_dlna_services()
+        async with self._restart_lock:
+            await self._stop_dlna_services()
+            # 先停掉旧的 AirPlay, 避免重启失败时旧实例带着过期音箱残留
+            if self.airplay_manager:
+                await self.airplay_manager.stop()
+                self.airplay_manager = None
+            # 清空旧 controllers, 防止 AirPlay 停止回调触发旧 auth 重新登录
+            # (旧 controller 持有旧 auth 引用, close() 后回调会触发并发登录)
+            if self.speaker_manager:
+                self.speaker_manager.controllers.clear()
+            # 关闭并重新初始化 auth, 确保账号切换生效
+            await self.auth.close()
+            self.auth = AuthManager(self.config)
+            self.speaker_manager = SpeakerManager(self.config, self.auth)
+            # _start_dlna_services 内部已重启 AirPlay (先停旧再启新), 无需再次重启
+            await self._start_dlna_services()
 
     async def _stop_dlna_services(self):
         """停止 DLNA 服务"""
