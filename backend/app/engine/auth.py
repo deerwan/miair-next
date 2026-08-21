@@ -52,6 +52,11 @@ class AuthManager:
             log.warning("AuthManager 已关闭, 跳过登录")
             return
         async with self._login_lock:
+            # 幂等: 已登录则跳过。扫码热重启 / 设备轮询可能并发触发多次 login,
+            # 若每次都换发 serviceToken, 短时间多次 serviceLogin 会被小米风控
+            # (返回 70016 登录验证失败), 导致服务起不来。
+            if self._logged_in and self.mina_service is not None:
+                return
             await self._do_login()
 
     async def _do_login(self):
@@ -91,16 +96,26 @@ class AuthManager:
             token_home = token_store
             try:
                 os.makedirs(os.path.dirname(token_home), exist_ok=True)
+                # 若旧 .mi.token 已含 micoapi 缓存 (miservice 以 sid 为 key 保存
+                # [ssecurity, serviceToken]), 保留它: 避免预写覆盖导致每次登录都
+                # 强制用 passToken 换发。短时间多次 serviceLogin 会被小米风控返回
+                # 70016 (生产 issue #1 的真正根因); 保留缓存后, device_list 等
+                # 调用可直接复用 serviceToken, 无需换发。
+                existing_token = {}
+                try:
+                    with open(token_home) as f:
+                        existing_token = json.load(f)
+                except Exception:
+                    pass
+                new_token = {
+                    "userId": token_data["userId"],
+                    "passToken": token_data["passToken"],
+                    "deviceId": "miair_device",
+                }
+                if existing_token.get("micoapi"):
+                    new_token["micoapi"] = existing_token["micoapi"]
                 with open(token_home, "w") as f:
-                    json.dump(
-                        {
-                            "userId": token_data["userId"],
-                            "passToken": token_data["passToken"],
-                            "deviceId": "miair_device",
-                        },
-                        f,
-                        indent=2,
-                    )
+                    json.dump(new_token, f, indent=2)
             except Exception as e:
                 log.warning(f"预写 .mi.token 失败: {e}")
 
@@ -128,32 +143,48 @@ class AuthManager:
         # 用 passToken 真正换发 serviceToken (并 save_token 回盘)。不再盲目置
         # _logged_in=True, 避免 "使用 cookie 登录成功" 却实际 Login failed 的伪成功。
         if token_data.get("userId") and token_data.get("passToken"):
-            try:
-                ok = await self.account.login("micoapi")
-                if not ok:
-                    # 同 session 登录失败, 可能是 session 状态损坏 / cookie jar 污染。
-                    # 参考 xiaomusic _try_fresh_session_and_relogin: 丢弃旧 session,
-                    # 用全新 session + 全新 MiAccount 重登一次, 避免"同一个损坏
-                    # session 无限重试导致连锁失败"。
-                    ok = await self._relogin_with_fresh_session()
-                if ok:
-                    self._logged_in = True
-                    log.info("使用 cookie 登录成功 (已换发 serviceToken)")
-                else:
+            # 优先复用 .mi.token 中已缓存的 serviceToken (miservice 以 sid 为 key):
+            # 直接发 device_list 验证, 命中则零 serviceLogin; 401 时 miservice 的
+            # mi_request 内部会自动 relogin (仅换发一次)。避免每次启动/热重启都
+            # 强制换发, 短时间多次 serviceLogin 会被小米风控返回 70016, 导致
+            # 服务起不来 (生产 issue #1 的真正根因)。
+            reused = False
+            if self.account.token and self.account.token.get("micoapi"):
+                try:
+                    await MiNAService(self.account).device_list()
+                    reused = True
+                except Exception as e:
+                    log.warning(f"缓存 serviceToken 失效, 转用 passToken 换发: {e}")
+            if reused:
+                self._logged_in = True
+                log.info("使用 cookie 登录成功 (复用缓存 serviceToken, 未触发换发)")
+            else:
+                try:
+                    ok = await self.account.login("micoapi")
+                    if not ok:
+                        # 同 session 登录失败, 可能是 session 状态损坏 / cookie jar 污染。
+                        # 参考 xiaomusic _try_fresh_session_and_relogin: 丢弃旧 session,
+                        # 用全新 session + 全新 MiAccount 重登一次, 避免"同一个损坏
+                        # session 无限重试导致连锁失败"。
+                        ok = await self._relogin_with_fresh_session()
+                    if ok:
+                        self._logged_in = True
+                        log.info("使用 cookie 登录成功 (已换发 serviceToken)")
+                    else:
+                        self._logged_in = False
+                        log.error(
+                            "Cookie 登录失败 (passToken 可能已过期或被吊销), 请重新扫码"
+                        )
+                except Exception as e:
                     self._logged_in = False
-                    log.error(
-                        "Cookie 登录失败 (passToken 可能已过期或被吊销), 请重新扫码"
+                    log.error(f"Cookie 登录异常: {e}")
+                    # miservice 在 serviceLogin 失败后会把 account.token 置为 None,
+                    # 导致下次 login() 时 self.token["deviceId"] 抛 TypeError。这里重建
+                    # MiAccount 并预置最小 token, 避免 None 残留。
+                    self.account = MiAccount(
+                        self.session, "", "", token_store=token_store
                     )
-            except Exception as e:
-                self._logged_in = False
-                log.error(f"Cookie 登录异常: {e}")
-                # miservice 在 serviceLogin 失败后会把 account.token 置为 None,
-                # 导致下次 login() 时 self.token["deviceId"] 抛 TypeError。这里重建
-                # MiAccount 并预置最小 token, 避免 None 残留。
-                self.account = MiAccount(
-                    self.session, "", "", token_store=token_store
-                )
-                self.account.token = {"deviceId": "miair_device"}
+                    self.account.token = {"deviceId": "miair_device"}
         else:
             try:
                 await self.account.login("micoapi")
