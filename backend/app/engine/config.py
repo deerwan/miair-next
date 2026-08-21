@@ -94,6 +94,8 @@ class Config:
     enable_voice_control: bool = False
     # 自动重启（当登录失败或服务异常时）
     auto_restart: bool = False
+    # serviceToken 过期时间戳(秒), 0 表示未知/未续期
+    token_expires_at: float = 0.0
     voice_poll_interval: int = 1
     # 通知推送 (登录过期/失败提醒): notify_type 单选 (""=关闭 / feishu / wxpusher)
     notify_type: str = ""
@@ -118,24 +120,68 @@ class Config:
             self.password = os.getenv("MI_PASS", "")
         if not self.mi_did:
             self.mi_did = os.getenv("MI_DID", "")
-        if not self.hostname:
-            self.hostname = os.getenv("MIAIR_HOSTNAME", "")
+        # MIAIR_HOSTNAME 环境变量优先级最高 (覆盖持久化配置),
+        # 用于纠正多网卡/容器下自动探测到的错误 IP 导致 AirPlay 不可连接
+        env_hostname = os.getenv("MIAIR_HOSTNAME", "")
+        if env_hostname:
+            self.hostname = env_hostname
         if not self.hostname:
             self.hostname = self._detect_local_ip()
 
     @staticmethod
     def _detect_local_ip() -> str:
-        """自动检测本机局域网 IP"""
+        """自动检测本机局域网 IP。
+
+        优先取默认路由出口 IP (UDP connect 探测)，但仅当其是私网段且不是
+        常见虚拟网卡网段 (docker0/tailscale) 时才采用；否则遍历所有网卡候选，
+        取第一个符合私网段的 IP。
+        解决多网卡 / Docker host 网络 + VPN(旁路由) 场景下自动探测到错误 IP
+        (如公网段 172.5.x.x 或 172.17.x docker0) 导致 AirPlay/DLNA 不可连接的问题。
+        """
+        import ipaddress
         import socket
 
+        def _is_lan_ip(ip: str) -> bool:
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                return False
+            if addr.is_loopback or addr.is_link_local:
+                return False
+            if not addr.is_private:
+                return False
+            # 排除常见虚拟网卡网段: docker0 (172.17.0.0/16) / tailscale (100.64.0.0/10)
+            for net in ("172.17.0.0/16", "100.64.0.0/10"):
+                if addr in ipaddress.ip_network(net):
+                    return False
+            return True
+
+        # 1) 默认路由出口 IP
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
+            default_ip = s.getsockname()[0]
             s.close()
-            return ip
+            if _is_lan_ip(default_ip):
+                return default_ip
         except Exception:
-            return "127.0.0.1"
+            pass
+
+        # 2) 遍历网卡候选: 通过 UDP connect 到各私网段广播地址获取各网卡源 IP
+        #    (UDP connect 不实际发包, 仅做路由选择, 各系统均安全)
+        candidates: set[str] = set()
+        for target in ("10.255.255.255", "192.168.255.255", "172.31.255.255"):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect((target, 80))
+                candidates.add(s.getsockname()[0])
+                s.close()
+            except Exception:
+                pass
+        for ip in candidates:
+            if _is_lan_ip(ip):
+                return ip
+        return "127.0.0.1"
 
     @property
     def mi_token_home(self) -> str:

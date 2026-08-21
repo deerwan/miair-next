@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+import json
 
 import aiohttp
 from miservice import MiAccount, MiIOService, MiNAService
@@ -57,20 +58,38 @@ class AuthManager:
         # 创建 MiAccount，如果使用 cookie 登录，传入空的账号密码
         if token_data.get("userId") and token_data.get("passToken"):
             # 使用 cookie 登录，传入空的账号密码，避免触发密码登录流程
+            #
+            # 关键修复: miservice 的 MiAccount 在 __init__ 时会从 token_store (即
+            # config.mi_token_home 指向的 .mi.token 文件) 加载 token。但 QR 登录只把
+            # "userId=...; passToken=..." 写进了 config.cookie 字符串, .mi.token 文件为空,
+            # 导致 miservice 读不到 passToken, login() 时走空 passToken 分支 →
+            # 小米返回 code 70016 "登录验证失败"。
+            #
+            # 因此这里把 cookie 中的 userId/passToken/deviceId 预写入 .mi.token 文件,
+            # 让 miservice 的 MiAccount 能正常加载, 并交由 miservice.login() 用 passToken
+            # 自动换发 serviceToken 并 save_token() 回盘 (完整自愈链路)。
+            token_home = token_store
+            try:
+                os.makedirs(os.path.dirname(token_home), exist_ok=True)
+                with open(token_home, "w") as f:
+                    json.dump(
+                        {
+                            "userId": token_data["userId"],
+                            "passToken": token_data["passToken"],
+                            "deviceId": "miair_device",
+                        },
+                        f,
+                        indent=2,
+                    )
+            except Exception as e:
+                log.warning(f"预写 .mi.token 失败: {e}")
+
             self.account = MiAccount(
                 self.session,
                 "",  # 空账号
                 "",  # 空密码
                 token_store=token_store,
             )
-            # 设置 token，包含所有必要字段
-            self.account.token = {
-                "userId": token_data["userId"],
-                "passToken": token_data["passToken"],
-                "deviceId": "miair_device",
-                "ssecurity": "",
-                "serviceToken": "",
-            }
             log.info("使用 cookie 登录")
         else:
             # 使用账号密码登录
@@ -85,10 +104,30 @@ class AuthManager:
                 self.account.token = {"deviceId": "miair_device"}
 
         # 显式调用 login
-        # 如果使用 cookie 登录，跳过 login 调用，直接标记为已登录
+        # cookie 登录: 已把 userId/passToken 预写入 .mi.token 文件, 这里让 miservice
+        # 用 passToken 真正换发 serviceToken (并 save_token 回盘)。不再盲目置
+        # _logged_in=True, 避免 "使用 cookie 登录成功" 却实际 Login failed 的伪成功。
         if token_data.get("userId") and token_data.get("passToken"):
-            self._logged_in = True
-            log.info("使用 cookie 登录成功")
+            try:
+                ok = await self.account.login("micoapi")
+                if ok:
+                    self._logged_in = True
+                    log.info("使用 cookie 登录成功 (已换发 serviceToken)")
+                else:
+                    self._logged_in = False
+                    log.error(
+                        "Cookie 登录失败 (passToken 可能已过期或被吊销), 请重新扫码"
+                    )
+            except Exception as e:
+                self._logged_in = False
+                log.error(f"Cookie 登录异常: {e}")
+                # miservice 在 serviceLogin 失败后会把 account.token 置为 None,
+                # 导致下次 login() 时 self.token["deviceId"] 抛 TypeError。这里重建
+                # MiAccount 并预置最小 token, 避免 None 残留。
+                self.account = MiAccount(
+                    self.session, "", "", token_store=token_store
+                )
+                self.account.token = {"deviceId": "miair_device"}
         else:
             try:
                 await self.account.login("micoapi")

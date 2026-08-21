@@ -1,6 +1,6 @@
 """MiAir 常量定义"""
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 
 
 # SSDP 相关
@@ -61,6 +61,7 @@ NEED_USE_PLAY_MUSIC_API = [
     "L15A",
     "L07A",
     "L16A",
+    "L16B",
     "L17A",
 ]
 
