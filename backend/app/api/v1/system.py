@@ -59,6 +59,13 @@ async def system_status(
     config=Depends(get_engine_config),
 ):
     """系统状态"""
+    auth = orch.auth
+    # serviceToken 已使用时长 (小时): 供前端/运维判断续期状态; 未登录时为 None
+    token_age_hours = (
+        round((time.time() - auth._service_token_issued_at) / 3600, 1)
+        if auth._service_token_issued_at > 0
+        else None
+    )
     return {
         "version": __version__,
         "dlna_running": orch.dlna_running,
@@ -67,6 +74,8 @@ async def system_status(
         "dlna_port": config.dlna_port,
         "has_account": bool(config.account or config.cookie),
         "logged_in": orch.auth.is_logged_in(),
+        "service_token_age_hours": token_age_hours,
+        "token_refresh_running": bool(auth._refresh_task and not auth._refresh_task.done()),
         "uptime_seconds": int(time.time() - _START_TIME),
         "memory_mb": _memory_mb(),
     }

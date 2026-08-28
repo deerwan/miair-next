@@ -120,9 +120,9 @@ start() {
   # ---------- 后端 ----------
   ensure_backend_deps
   kill_port 8300
-  echo "• 启动后端 (日志: $LOG_DIR/backend.log)"
+  echo "• 启动后端 (开发模式热重载, 日志: $LOG_DIR/backend.log)"
   cd "$BACKEND"
-  nohup ./.venv/bin/python run.py > "$LOG_DIR/backend.log" 2>&1 &
+  nohup ./.venv/bin/python run.py --reload > "$LOG_DIR/backend.log" 2>&1 &
   echo $! > "$BACKEND_PID"
   echo "  backend pid: $(cat "$BACKEND_PID")"
 

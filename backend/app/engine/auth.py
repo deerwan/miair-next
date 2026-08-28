@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import json
+import time
 
 import aiohttp
 from miservice import MiAccount, MiIOService, MiNAService
@@ -12,6 +13,15 @@ from miservice import MiAccount, MiIOService, MiNAService
 from app.engine.config import Config
 
 log = logging.getLogger("miair")
+
+# serviceToken 主动续期:
+# 定时检查, 当 serviceToken 年龄超过阈值时提前用 passToken 静默换发,
+# 避免运行期过期只能等调用失败才补救; 低频换发也不会触发小米风控。
+TOKEN_REFRESH_CHECK_INTERVAL = 2 * 3600  # 续期检查间隔 (秒)
+TOKEN_REFRESH_MAX_AGE = 9 * 3600  # serviceToken 超过此年龄则主动换发 (约 12 小时有效)
+# 登录成功后的宽限期 (秒): 期间 API 失败判定为临时问题 (冷却容忍),
+# 不推送 "登录失效" 通知, 避免网络抖动误报
+TRANSIENT_FAILURE_GRACE = 60
 
 
 def parse_cookie_string(cookie_str: str) -> dict:
@@ -45,6 +55,11 @@ class AuthManager:
         # 关闭标记: close() 后旧实例不再执行登录, 避免旧 AirPlay 停止回调
         # 触发并发登录与新建实例竞争
         self._closed = False
+        # 最近一次登录成功的时间戳: 宽限期内 API 失败按临时问题处理, 不误判失效
+        self._last_login_ok_time = 0.0
+        # serviceToken 最近换发/载入时间: 供主动续期判断年龄
+        self._service_token_issued_at = 0.0
+        self._refresh_task: asyncio.Task | None = None
 
     async def login(self):
         """登录小米账号并初始化服务 (串行化, 防并发竞态)"""
@@ -157,6 +172,13 @@ class AuthManager:
                     log.warning(f"缓存 serviceToken 失效, 转用 passToken 换发: {e}")
             if reused:
                 self._logged_in = True
+                self._last_login_ok_time = time.time()
+                # 缓存的 serviceToken 年龄未知, 以 .mi.token 文件修改时间近似,
+                # 供主动续期判断是否临近过期
+                try:
+                    self._service_token_issued_at = os.path.getmtime(token_store)
+                except OSError:
+                    self._service_token_issued_at = 0.0
                 log.info("使用 cookie 登录成功 (复用缓存 serviceToken, 未触发换发)")
             else:
                 try:
@@ -169,11 +191,25 @@ class AuthManager:
                         ok = await self._relogin_with_fresh_session()
                     if ok:
                         self._logged_in = True
+                        self._last_login_ok_time = time.time()
+                        self._service_token_issued_at = time.time()
+                        # 小米可能在换发时轮换了 passToken, 同步回写配置避免重启后旧值覆盖
+                        self._sync_pass_token_to_config()
                         log.info("使用 cookie 登录成功 (已换发 serviceToken)")
                     else:
                         self._logged_in = False
                         log.error(
                             "Cookie 登录失败 (passToken 可能已过期或被吊销), 请重新扫码"
+                        )
+                        # 与账密登录失败分支对齐: 推送失效通知, 让用户及时重新扫码,
+                        # 而非只能靠翻日志发现服务没起来 (同一事件 1 小时内只推一次)
+                        from app.engine.notify import notify_async
+                        notify_async(
+                            self.config,
+                            "login_expired",
+                            "[MiAir Next] 小米登录已失效",
+                            "Cookie (passToken) 已过期或被吊销, 投送服务无法启动。"
+                            "请到管理后台重新扫码登录。",
                         )
                 except Exception as e:
                     self._logged_in = False
@@ -189,6 +225,8 @@ class AuthManager:
             try:
                 await self.account.login("micoapi")
                 self._logged_in = True
+                self._last_login_ok_time = time.time()
+                self._service_token_issued_at = time.time()
                 log.info("小米账号登录成功")
             except Exception as e:
                 self._logged_in = False
@@ -320,6 +358,11 @@ class AuthManager:
                             return devices
                     except Exception as e2:
                         log.warning(f"重试 device_list 仍然失败: {e2}")
+                # 宽限期内刚登录成功: 判定为临时问题 (网络抖动/风控窗口),
+                # 不推送失效通知, 由后续周期检查兜底 (冷却容忍)
+                if time.time() - self._last_login_ok_time < TRANSIENT_FAILURE_GRACE:
+                    log.warning("device_list 失败发生在登录宽限期内, 暂不判定登录失效")
+                    return []
                 log.error(f"Cookie 可能已过期，请重新获取: {e}")
                 # 推送登录失效通知 (同一事件 1 小时内只推一次)
                 from app.engine.notify import notify_async
@@ -365,10 +408,143 @@ class AuthManager:
         """是否已成功登录"""
         return self._logged_in
 
+    # ---------- serviceToken 主动续期 ----------
+
+    def start_token_refresh(self):
+        """启动 serviceToken 主动续期任务 (登录成功后调用, 幂等)"""
+        if self._closed:
+            return
+        if self._refresh_task is None or self._refresh_task.done():
+            self._refresh_task = asyncio.create_task(self._token_refresh_loop())
+
+    async def stop_token_refresh(self):
+        """停止续期任务"""
+        if self._refresh_task:
+            self._refresh_task.cancel()
+            try:
+                await self._refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._refresh_task = None
+
+    async def _token_refresh_loop(self):
+        """定期用 passToken 提前换发 serviceToken, 避免运行期过期
+
+        serviceToken 约 12 小时有效; 每 2 小时检查一次, 年龄超过 9 小时才换发:
+        低频不触发风控, 且在过期前留足余量。换发失败时恢复备份的 .mi.token ——
+        miservice login() 失败可能清掉缓存, 不能让仍在生效的旧缓存陪葬。
+        """
+        try:
+            while not self._closed:
+                await asyncio.sleep(TOKEN_REFRESH_CHECK_INTERVAL)
+                if self._closed or not self._logged_in or not self.config.cookie:
+                    continue  # 仅 cookie 登录场景有 passToken 可续期
+                age = time.time() - self._service_token_issued_at
+                if age < TOKEN_REFRESH_MAX_AGE:
+                    continue
+                async with self._login_lock:
+                    if self._closed or not self._logged_in or not self.account:
+                        continue
+                    log.info(
+                        f"serviceToken 已使用 {age / 3600:.1f}h, "
+                        "主动用 passToken 续期..."
+                    )
+                    backup = self._backup_token_file()
+                    try:
+                        ok = await self.account.login("micoapi")
+                    except Exception as e:
+                        log.warning(f"serviceToken 续期异常: {e}")
+                        ok = False
+                    if ok:
+                        self._service_token_issued_at = time.time()
+                        self._last_login_ok_time = time.time()
+                        # 续期换发同样可能轮换 passToken, 需回写配置保持凭据最新
+                        self._sync_pass_token_to_config()
+                        log.info("serviceToken 续期成功")
+                    else:
+                        log.warning("serviceToken 续期失败, 保留旧缓存等待下轮重试")
+                        await self._restore_token_after_failed_refresh(backup)
+        except asyncio.CancelledError:
+            pass
+
+    def _sync_pass_token_to_config(self):
+        """回写轮换后的 passToken 到 config.cookie, 保持凭据始终最新
+
+        miservice 换发成功后会把小米返回的 (可能轮换过的) passToken 更新到
+        account.token 并落盘 .mi.token; 但启动路径预写 .mi.token 用的是
+        config.cookie。若小米轮换了 passToken 并作废旧值, config.cookie 里的
+        旧值会在下次重启时覆盖新值, 导致登录失败。回写后配置始终持有最新凭据。
+        """
+        token = self.account.token if self.account else None
+        if not token:
+            return
+        new_pass = token.get("passToken")
+        if not new_pass:
+            return
+        current = parse_cookie_string(self.config.cookie or "")
+        if current.get("passToken") == new_pass:
+            return  # 未轮换, 无需回写
+        self.config.cookie = f"userId={token.get('userId', '')}; passToken={new_pass}"
+        try:
+            self.config.save()
+            log.info("检测到 passToken 已轮换, 已同步回写配置")
+        except Exception as e:
+            log.warning(f"passToken 回写配置失败: {e}")
+
+    def _backup_token_file(self) -> bytes | None:
+        """备份 .mi.token 内容, 供续期失败时恢复"""
+        try:
+            with open(self.config.mi_token_home, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    async def _restore_token_after_failed_refresh(self, backup: bytes | None):
+        """续期失败后恢复 .mi.token 并重建 session/account
+
+        miservice login() 失败时可能把 account.token 置 None / 清掉文件,
+        旧缓存被毁会导致后续调用连锁失败; 恢复备份让仍有效的旧
+        serviceToken 继续可用。
+        """
+        token_home = self.config.mi_token_home
+        if backup is not None:
+            try:
+                os.makedirs(os.path.dirname(token_home), exist_ok=True)
+                with open(token_home, "wb") as f:
+                    f.write(backup)
+            except OSError as e:
+                log.warning(f"恢复 .mi.token 失败: {e}")
+        try:
+            # 重建 session 与 account, 丢弃可能被污染的内存状态
+            old_session = self.session
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+            )
+            if old_session and not old_session.closed:
+                try:
+                    await old_session.close()
+                except Exception:
+                    pass
+            self.account = MiAccount(self.session, "", "", token_store=token_home)
+            if not self.account.token:
+                token_data = parse_cookie_string(self.config.cookie or "")
+                if token_data.get("userId") and token_data.get("passToken"):
+                    self.account.token = {
+                        "userId": token_data["userId"],
+                        "passToken": token_data["passToken"],
+                        "deviceId": "miair_device",
+                    }
+            # 基于恢复后的 account 重建服务句柄 (SpeakerController 通过动态属性访问)
+            self.mina_service = MiNAService(self.account)
+            self.miio_service = MiIOService(self.account)
+        except Exception as e:
+            log.warning(f"续期失败后重建 account 异常: {e}")
+
     async def close(self):
         """关闭 session"""
         # 置关闭标记: 防止旧实例被 AirPlay 停止回调等触发重新登录 (与新建实例并发竞态)
         self._closed = True
+        await self.stop_token_refresh()
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None

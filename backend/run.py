@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""MiAir Next 入口点 — 自动检测并安装缺失依赖后启动 (uvicorn)"""
+"""MiAir Next 入口点 — 自动检测并安装缺失依赖后启动 (uvicorn)
+
+开发模式 (代码改动自动热重载): python run.py --reload 或 MIAIR_RELOAD=1
+"""
 
 import os
 import subprocess
@@ -48,7 +51,20 @@ def main():
 
     host = os.environ.get("MIAIR_WEB_HOST", "0.0.0.0")
     port = int(os.environ.get("MIAIR_WEB_PORT", "8300"))
-    uvicorn.run("app.main:app", host=host, port=port, log_level="warning")
+    # 开发模式: --reload 参数或 MIAIR_RELOAD=1 开启热重载;
+    # reload_dirs 限定 app 目录, 避免监听 .venv / 数据目录引发频繁重启。
+    # 注意: 热重启会重建 AirPlay/SSDP 等子服务, 仅限本地开发使用, 生产不开启。
+    if "--reload" in sys.argv[1:] or os.environ.get("MIAIR_RELOAD") == "1":
+        uvicorn.run(
+            "app.main:app",
+            host=host,
+            port=port,
+            log_level="info",
+            reload=True,
+            reload_dirs=["app"],
+        )
+    else:
+        uvicorn.run("app.main:app", host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

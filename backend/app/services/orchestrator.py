@@ -112,6 +112,9 @@ class Orchestrator:
                 self._clear_runtime()
                 return
 
+            # 登录成功后启动 serviceToken 主动续期, 避免运行期过期 (幂等)
+            self.auth.start_token_refresh()
+
             # 获取设备列表, 确保能正常获取新账号的设备
             device_list = await self.auth.get_device_list()
             if not device_list:
