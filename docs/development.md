@@ -1,13 +1,32 @@
 # 本地开发
 
-## 后端(FastAPI)
+## 一键开发脚本 (推荐)
+
+```bash
+./dev.sh start     # 启动前后端 (自动建 venv / 装依赖 / 释放端口)
+./dev.sh stop      # 停止并按 PID + 端口兜底清理
+./dev.sh restart   # 重启
+./dev.sh status    # 查看运行状态
+```
+
+- 后端运行在 `:8300` (开发模式热重载, 仅监听 `app/` 目录变更), 前端 Vite 运行在 `:5173` (`/api` 已代理到后端, 含 WebSocket)。
+- AirPlay 绑定 IP 默认取 en0 网卡, 多网卡环境下可用 `MIAIR_HOSTNAME=<IP> ./dev.sh start` 覆盖。
+- 日志固定输出到 `/tmp/miair-logs/backend.log` 与 `/tmp/miair-logs/frontend.log`。
+
+> ⚠️ **请勿在终端手动运行 `python run.py` / `uvicorn` 启动开发服务**:
+> 异常退出 (直接关终端、Ctrl-C 被吞) 会遗留孤儿进程, 继续占用 8300/8200
+> 端口与 SSDP/mDNS 组播套接字, 导致新实例 DLNA 起不来
+> (`Errno 48 address already in use`)。排查: `lsof -nP -i :8300` (8200/5173 同理)。
+> 下面的手动方式仅用于需要自定义启动参数的场景。
+
+## 后端(FastAPI) — 手动方式
 
 ```bash
 cd backend
 python run.py          # 自动安装缺失依赖并在 :8300 启动
 ```
 
-## 前端(Vue 3 + Vite)
+## 前端(Vue 3 + Vite) — 手动方式
 
 ```bash
 cd frontend
@@ -77,5 +96,6 @@ miair-next/
 ├── docker-compose.yml
 ├── install.sh               # 一键安装脚本
 ├── manage.sh                # 容器管理脚本 (start/stop/update...)
+├── dev.sh                   # 本地一键开发脚本 (前后端启停 / 日志归集)
 └── .github/workflows/       # CI: 云端多架构镜像发布 + GitHub Release
 ```

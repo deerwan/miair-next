@@ -298,7 +298,7 @@ class SpeakerController:
 
             info = json.loads(info_str)
             # 获取成功，重置连续登录失败计数
-            SpeakerController._consecutive_login_failures = 0
+            self.consecutive_login_failures = 0
             return {
                 "status": info.get("status", 0),
                 "volume": int(info.get("volume", 0)),

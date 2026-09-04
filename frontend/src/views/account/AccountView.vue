@@ -19,7 +19,7 @@
           </div>
         </n-space>
         <n-space>
-          <n-button circle :loading="refreshing" title="刷新重新登录" @click="refreshAccount">
+          <n-button circle :loading="refreshing" :disabled="!status.has_account" title="刷新重新登录" @click="refreshAccount">
             <template #icon>
               <n-icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -132,7 +132,7 @@
 
     <n-card title="选择音箱设备">
       <template #header-extra>
-        <n-button circle size="small" :loading="loadingDevices" title="刷新设备列表" @click="loadDevices">
+        <n-button circle size="small" :loading="loadingDevices" :disabled="!status.has_account" title="刷新设备列表" @click="loadDevices">
           <template #icon>
             <n-icon>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -328,7 +328,9 @@ async function pollLoop(sessionId: string) {
       qr.statusText = '登录成功, 请在下方勾选音箱并保存'
       message.success('扫码登录成功')
       qr.sessionId = ''
-      // 刷新脱敏 Cookie 与设备列表
+      // 刷新脱敏 Cookie、账号状态与设备列表
+      // (状态卡不刷新的话 has_account 要等 30s 轮询才变, 禁用态的按钮会多灰半分钟)
+      await loadAccountStatus()
       await loadInit()
       await loadDevices()
       // 首次登录后若尚未选择设备, 自动勾选检测到的全部音箱, 提示保存

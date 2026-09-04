@@ -74,6 +74,26 @@ def fake_account(monkeypatch):
     return FakeAccount
 
 
+class FakeMiNA:
+    """替代 miservice.MiNAService: device_list 可编程失败/返回"""
+
+    fail_queue: list[Exception] = []
+    result: list = []
+
+    def __init__(self, account):
+        self.account = account
+
+    async def device_list(self):
+        if FakeMiNA.fail_queue:
+            raise FakeMiNA.fail_queue.pop(0)
+        return FakeMiNA.result
+
+    @classmethod
+    def reset(cls, fail_queue=None, result=None):
+        cls.fail_queue = list(fail_queue or [])
+        cls.result = list(result or [])
+
+
 def _make_auth(tmp_path, cookie=COOKIE, account="", password=""):
     cfg = Config(conf_path=str(tmp_path))
     cfg.cookie = cookie
@@ -239,3 +259,60 @@ class TestTokenExpiry:
         expires_at = _run((auth, _main))
         expected = SERVICE_TOKEN_VALID_HOURS * 3600
         assert expires_at == pytest.approx(time.time() + expected, abs=30)
+
+
+class TestDoLogin:
+    def test_password_login_false_is_not_pseudo_success(self, tmp_path, monkeypatch):
+        """miservice 的 login() 失败时返回 False 而非抛异常, 不得误标为登录成功"""
+        FakeAccount.password_login_ok = False
+        monkeypatch.setattr(AuthManager, "validate_token", _validate(True))
+        auth = _make_auth(tmp_path, cookie="", account="13800000000", password="pwd")
+
+        async def _main():
+            await auth.login()
+            return auth.is_logged_in()
+
+        assert _run((auth, _main)) is False
+
+
+class TestDeviceListRecovery:
+    """get_device_list 故障自愈路径 (账密模式, cookie 为空场景)"""
+
+    def _make_password_auth(self, tmp_path, monkeypatch) -> AuthManager:
+        monkeypatch.setattr(AuthManager, "validate_token", _validate(True))
+        monkeypatch.setattr(auth_module, "MiNAService", FakeMiNA)
+        # 阻断 _sync_pass_token_to_config 回写 cookie, 保持「cookie 为空」的
+        # 账密分支 (真实场景它负责处理轮换回写, 与本测试无关)
+        monkeypatch.setattr(
+            AuthManager, "_sync_pass_token_to_config", lambda self: None
+        )
+        return _make_auth(tmp_path, cookie="", account="13800000000", password="pwd")
+
+    def test_recovers_after_transient_device_list_failure(self, tmp_path, monkeypatch):
+        """device_list 偶发网络失败 → 丢弃 session 重登 → 重试成功
+
+        回归: 旧实现 close() 后直接 login(), 而 close() 置位的 _closed 标记
+        会让 login() 直接跳过, AuthManager 从此假死直到进程重启。
+        """
+        FakeMiNA.reset(
+            fail_queue=[Exception("Connection timeout to mina")], result=["dev1"]
+        )
+        auth = self._make_password_auth(tmp_path, monkeypatch)
+
+        async def _main():
+            devices = await auth.get_device_list()
+            return (
+                devices,
+                auth._closed,
+                auth.is_logged_in(),
+                auth._refresh_task is not None and not auth._refresh_task.done(),
+            )
+
+        devices, was_closed, logged_in, refresh_running = _run((auth, _main))
+
+        assert devices == ["dev1"]  # 重登后重试成功
+        # 首次登录 + 自愈重登, 共两次真实登录
+        assert FakeAccount.login_calls == ["13800000000", "13800000000"]
+        assert was_closed is False  # 实例仍可用 (而非假死)
+        assert logged_in is True
+        assert refresh_running is True  # close() 停掉的续期任务已重新拉起

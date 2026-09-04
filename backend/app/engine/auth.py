@@ -237,7 +237,11 @@ class AuthManager:
                     self.account.token = {"deviceId": "miair_device"}
         else:
             try:
-                await self.account.login("micoapi")
+                ok = await self.account.login("micoapi")
+                if not ok:
+                    # miservice 的 login() 失败时返回 False (并把 token 置 None)
+                    # 而非抛异常, 不检查返回值会把失败误标为登录成功 (伪成功)
+                    raise Exception("Login failed (账号密码登录未成功, 凭据无效或需要人机验证)")
                 self._mark_login_ok()
                 # 账密登录会签发一份新的 passToken, 回写配置后: 后续续期可走
                 # passToken 级别, 且三级链的兜底凭证在重启后依然有效
@@ -388,10 +392,17 @@ class AuthManager:
                     "Cookie 可能已过期, 请到管理后台重新扫码登录。",
                 )
                 return []
+            # 账密模式: 丢弃旧 session 后在同一实例上重新登录。
+            # close() 会置 _closed=True (该标记的本意是阻止已被热重启替换的
+            # 旧实例再登录), 这里是当前实例的自愈, 必须在 login() 前复位标记,
+            # 否则 login() 会因 _closed 直接跳过, AuthManager 从此假死直到进程重启。
             await self.close()
+            self._closed = False
             await self.login()
             if not self._logged_in:
                 return []
+            # close() 停掉了续期任务, 重登成功后重新拉起 (幂等)
+            self.start_token_refresh()
             try:
                 devices = await self.mina_service.device_list()
                 return devices or []
