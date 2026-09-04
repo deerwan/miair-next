@@ -66,6 +66,12 @@ async def system_status(
         if auth._service_token_issued_at > 0
         else None
     )
+    # serviceToken 剩余有效期 (小时): 负数表示已过期, 由三级降级链兜底恢复
+    token_remaining_hours = (
+        round((config.token_expires_at - time.time()) / 3600, 1)
+        if config.token_expires_at > 0
+        else None
+    )
     return {
         "version": __version__,
         "dlna_running": orch.dlna_running,
@@ -75,6 +81,9 @@ async def system_status(
         "has_account": bool(config.account or config.cookie),
         "logged_in": orch.auth.is_logged_in(),
         "service_token_age_hours": token_age_hours,
+        "service_token_remaining_hours": token_remaining_hours,
+        # 是否配置了账号密码: passToken 过期时的自动恢复兜底凭证
+        "has_password_fallback": bool(config.account and config.password),
         "token_refresh_running": bool(auth._refresh_task and not auth._refresh_task.done()),
         "uptime_seconds": int(time.time() - _START_TIME),
         "memory_mb": _memory_mb(),

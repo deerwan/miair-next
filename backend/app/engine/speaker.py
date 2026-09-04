@@ -86,43 +86,32 @@ class SpeakerController:
         effective_audio_id = audio_id or self._default_audio_id()
         try:
             await self.auth.ensure_login()
+            # 登录失效由 call_api 统一走三级降级链恢复并重试一次
+            # (MinaHTTPClient 的 401 → onTokenExpired → retry)
             if self._should_use_music_api():
-                ret = await self.auth.mina_service.play_by_music_url(
-                    self.device_id, url, audio_id=effective_audio_id
+                ret = await self.auth.call_api(
+                    lambda: self.auth.mina_service.play_by_music_url(
+                        self.device_id, url, audio_id=effective_audio_id
+                    ),
+                    label="play_by_music_url",
                 )
                 log.info(f"play_by_music_url device_id={self.device_id} ret={ret}")
             else:
-                ret = await self.auth.mina_service.play_by_url(self.device_id, url)
+                ret = await self.auth.call_api(
+                    lambda: self.auth.mina_service.play_by_url(self.device_id, url),
+                    label="play_by_url",
+                )
                 log.info(f"play_by_url device_id={self.device_id} ret={ret}")
             return ret is not None
         except Exception as e:
             log.error(f"play_url 失败: {e}")
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试播放
-                try:
-                    await self.auth.ensure_login()
-                    if self._should_use_music_api():
-                        ret = await self.auth.mina_service.play_by_music_url(
-                            self.device_id, url, audio_id=effective_audio_id
-                        )
-                    else:
-                        ret = await self.auth.mina_service.play_by_url(self.device_id, url)
-                    return ret is not None
-                except Exception as e2:
-                    log.error(f"重新登录后 play_url 仍然失败: {e2}")
-                    return False
             return False
 
     async def search_audio_id(self, title: str, artist: str = "", fuzzy_fallback: bool = True) -> str:
         """搜小米官方曲库，返回匹配到的 audioID（供触屏音箱拉取歌词/封面）；未命中返回 ""
 
-        移植自 songloft-plugin-miot (MinaClient.searchAudioId)：优先按「歌名完全相等 +
-        歌手包含匹配」精确命中；精确未命中时按 songloft 的做法回退取搜索结果第一条。
+        fuzzy_fallback 参数(MinaClient.searchAudioId)：优先按「歌名完全相等 +
+        歌手包含匹配」精确命中；精确未命中时回退取搜索结果第一条。
         fuzzy_fallback=False 供持续搜索场景使用（AirPlay 歌词监听器）：
         滚动歌词行若模糊命中会被误判为切歌，导致反复重发播放指令。
         """
@@ -147,15 +136,19 @@ class SpeakerController:
             break
         query = f"{title}-{query_artist}" if query_artist else title
         try:
-            result = await self.auth.mina_service.mina_request(
-                "/music/search",
-                {
-                    "query": query,
-                    "queryType": "1",
-                    "offset": "0",
-                    "count": "6",
-                    "timestamp": str(int(time.time() * 1000)),
-                },
+            # 登录失效时由 call_api 恢复凭据并重试一次
+            result = await self.auth.call_api(
+                lambda: self.auth.mina_service.mina_request(
+                    "/music/search",
+                    {
+                        "query": query,
+                        "queryType": "1",
+                        "offset": "0",
+                        "count": "6",
+                        "timestamp": str(int(time.time() * 1000)),
+                    },
+                ),
+                label="曲库搜索",
             )
         except Exception as e:
             log.warning(f"曲库搜索失败 ({query}): {e}")
@@ -167,7 +160,7 @@ class SpeakerController:
             return ""
 
         # 优先「歌名完全相等 + 歌手包含」精确命中；精确未命中时回退策略：
-        # - fuzzy_fallback=True（默认，每首歌只搜一次的一次性场景，同 songloft）：
+        # - fuzzy_fallback=True（默认，每首歌只搜一次的一次性场景）：
         #   取搜索结果第一条，接口按相关度排序，首条通常就是目标歌；
         # - fuzzy_fallback=False（AirPlay 歌词监听器等持续搜索场景）：
         #   滚动歌词行若模糊"命中"会被误判为切歌，导致反复重发播放指令、
@@ -207,31 +200,20 @@ class SpeakerController:
             if self._should_use_music_api():
                 # 某些使用 play_by_music_url 的设备，调用 pause 后 API 状态不会
                 # 正确更新为 paused (status=2)，需改用 stop 来实现暂停语义
-                ret = await self.auth.mina_service.player_stop(self.device_id)
+                ret = await self.auth.call_api(
+                    lambda: self.auth.mina_service.player_stop(self.device_id),
+                    label="player_stop(as pause)",
+                )
                 log.info(f"player_stop(as pause) device_id={self.device_id} ret={ret}")
             else:
-                ret = await self.auth.mina_service.player_pause(self.device_id)
+                ret = await self.auth.call_api(
+                    lambda: self.auth.mina_service.player_pause(self.device_id),
+                    label="player_pause",
+                )
                 log.info(f"player_pause device_id={self.device_id} ret={ret}")
             return True
         except Exception as e:
             log.error(f"pause 失败: {e}")
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试暂停
-                try:
-                    await self.auth.ensure_login()
-                    if self._should_use_music_api():
-                        await self.auth.mina_service.player_stop(self.device_id)
-                    else:
-                        await self.auth.mina_service.player_pause(self.device_id)
-                    return True
-                except Exception as e2:
-                    log.error(f"重新登录后 pause 仍然失败: {e2}")
-                    return False
             return False
 
     async def stop(self) -> bool:
@@ -240,29 +222,20 @@ class SpeakerController:
             await self.auth.ensure_login()
             # 某些型号的小爱音箱在 stop 后仍会残留缓存，
             # 连续调用 stop + pause 可以更彻底地清空播放状态。
-            ret = await self.auth.mina_service.player_stop(self.device_id)
+            ret = await self.auth.call_api(
+                lambda: self.auth.mina_service.player_stop(self.device_id),
+                label="player_stop",
+            )
             await self.pause()
             log.info(f"player_stop device_id={self.device_id} ret={ret}")
             return True
         except Exception as e:
             log.error(f"stop 失败: {e}")
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试停止
-                try:
-                    await self.auth.ensure_login()
-                    await self.auth.mina_service.player_stop(self.device_id)
-                    await self.pause()
-                    return True
-                except Exception as e2:
-                    log.error(f"重新登录后 stop 仍然失败: {e2}")
-                    SpeakerController._consecutive_login_failures += 1
-                    SpeakerController._check_and_trigger_restart(self.auth.config)
-                    return False
+            # call_api 已尝试过三级降级链恢复, 走到这里说明凭据确实无法恢复,
+            # 才累计故障计数 (单次抖动不会误触发自动重启)
+            if AuthManager._is_login_error(e):
+                SpeakerController._consecutive_login_failures += 1
+                SpeakerController._check_and_trigger_restart(self.auth.config)
             return False
 
     async def set_volume(self, volume: int) -> bool:
@@ -270,36 +243,26 @@ class SpeakerController:
         volume = max(0, min(100, volume))
         try:
             await self.auth.ensure_login()
-            await self.auth.mina_service.player_set_volume(self.device_id, volume)
+            await self.auth.call_api(
+                lambda: self.auth.mina_service.player_set_volume(self.device_id, volume),
+                label="set_volume",
+            )
             if volume > 0:
                 self._last_volume = volume
             log.info(f"set_volume device_id={self.device_id} volume={volume}")
             return True
         except Exception as e:
             log.error(f"set_volume 失败: {e}")
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试设置音量
-                try:
-                    await self.auth.ensure_login()
-                    await self.auth.mina_service.player_set_volume(self.device_id, volume)
-                    if volume > 0:
-                        self._last_volume = volume
-                    return True
-                except Exception as e2:
-                    log.error(f"重新登录后 set_volume 仍然失败: {e2}")
-                    return False
             return False
 
     async def get_volume(self) -> int:
         """获取当前音量"""
         try:
             await self.auth.ensure_login()
-            status = await self.auth.mina_service.player_get_status(self.device_id)
+            status = await self.auth.call_api(
+                lambda: self.auth.mina_service.player_get_status(self.device_id),
+                label="get_volume",
+            )
             info = json.loads(status.get("data", {}).get("info", "{}"))
             volume = int(info.get("volume", 0))
             if volume > 0:
@@ -307,24 +270,6 @@ class SpeakerController:
             return volume
         except Exception as e:
             log.error(f"get_volume 失败: {e}")
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试获取音量
-                try:
-                    await self.auth.ensure_login()
-                    status = await self.auth.mina_service.player_get_status(self.device_id)
-                    info = json.loads(status.get("data", {}).get("info", "{}"))
-                    volume = int(info.get("volume", 0))
-                    if volume > 0:
-                        self._last_volume = volume
-                    return volume
-                except Exception as e2:
-                    log.error(f"重新登录后 get_volume 仍然失败: {e2}")
-                    return self._last_volume
             return self._last_volume
 
     async def get_status(self) -> dict:
@@ -336,21 +281,22 @@ class SpeakerController:
         """
         try:
             await self.auth.ensure_login()
-            playing_info = await self.auth.mina_service.player_get_status(
-                self.device_id
+            playing_info = await self.auth.call_api(
+                lambda: self.auth.mina_service.player_get_status(self.device_id),
+                label="get_status",
             )
-            
+
             # 检查 API 响应码。如果 code != 0，说明请求失败（如超时 3012），
             # 此时绝不能返回 status=0，否则会触发“已停止”的错误逻辑导致自动续播误触发。
             if playing_info.get("code") != 0:
                 raise Exception(f"Mina API Error: {playing_info}")
-                
+
             data = playing_info.get("data", {})
             info_str = data.get("info")
             if not info_str:
                 # 如果没有 info 字段，可能也是某种异常状态，但不代表停止
                 raise Exception(f"Mina API response missing 'info': {playing_info}")
-                
+
             info = json.loads(info_str)
             # 获取成功，重置连续登录失败计数
             SpeakerController._consecutive_login_failures = 0
@@ -359,35 +305,11 @@ class SpeakerController:
                 "volume": int(info.get("volume", 0)),
             }
         except Exception as e:
-            # 检查是否是登录失败的错误
-            if "Login failed" in str(e) or "登录验证失败" in str(e):
-                log.info("检测到登录失败，尝试重新登录...")
-                # 重置登录状态并重新登录
-                self.auth._logged_in = False
-                await self.auth.login()
-                # 重新尝试获取状态
-                try:
-                    await self.auth.ensure_login()
-                    playing_info = await self.auth.mina_service.player_get_status(
-                        self.device_id
-                    )
-                    if playing_info.get("code") != 0:
-                        raise Exception(f"Mina API Error: {playing_info}")
-                    data = playing_info.get("data", {})
-                    info_str = data.get("info")
-                    if not info_str:
-                        raise Exception(f"Mina API response missing 'info': {playing_info}")
-                    info = json.loads(info_str)
-                    # 重试成功，重置计数
-                    SpeakerController._consecutive_login_failures = 0
-                    return {
-                        "status": info.get("status", 0),
-                        "volume": int(info.get("volume", 0)),
-                    }
-                except Exception as e2:
-                    log.error(f"重新登录后 get_status 仍然失败: {e2}")
-                    SpeakerController._consecutive_login_failures += 1
-                    SpeakerController._check_and_trigger_restart(self.auth.config)
+            # call_api 内部已尝试三级降级链恢复, 走到这里说明凭据确实无法恢复,
+            # 才累计故障计数 (网络抖动不会误触发自动重启)
+            if AuthManager._is_login_error(e):
+                SpeakerController._consecutive_login_failures += 1
+                SpeakerController._check_and_trigger_restart(self.auth.config)
             # 向上抛出异常，让调用者（如 DeviceServer 的轮询任务）捕获并忽略本次轮询
             raise Exception(f"get_status 失败: {e}")
 

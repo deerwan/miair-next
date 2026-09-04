@@ -74,12 +74,10 @@ def setup_logging(verbose: bool, log_file: str | None = None):
     else:
         console = logging.StreamHandler()
     console.setFormatter(formatter)
-    logger.addHandler(console)
-
     ring_handler.setFormatter(formatter)
-    logger.addHandler(ring_handler)
 
     # 文件 — 每次启动清空, 大小上限 500KB (超过自动清空重写)
+    file_handler = None
     if log_file:
         log_dir = os.path.dirname(log_file)
         if log_dir:
@@ -92,4 +90,19 @@ def setup_logging(verbose: bool, log_file: str | None = None):
             log_file, maxBytes=500 * 1024, backupCount=0, encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
+
+    logger.addHandler(console)
+    logger.addHandler(ring_handler)
+    if file_handler:
         logger.addHandler(file_handler)
+
+    # miservice 的登录响应码 (如 70016 风控、passToken 失效) 是排查续期失败的
+    # 唯一证据, 但它默认只输出到 stderr、不进 miair.log, 导致生产环境完全
+    # 看不到失败原因。这里让它复用同一批 handler (只收 WARNING 及以上, 避免
+    # 它的 DEBUG 请求日志淹没文件)。
+    miservice_logger = logging.getLogger("miservice")
+    miservice_logger.setLevel(logging.WARNING)
+    miservice_logger.propagate = False
+    for handler in (console, ring_handler, file_handler):
+        if handler is not None:
+            miservice_logger.addHandler(handler)

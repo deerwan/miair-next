@@ -1,6 +1,6 @@
 """MiAir 常量定义"""
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 
 
 # SSDP 相关
@@ -37,7 +37,6 @@ UPNP_ERROR_TRANSITION_NOT_AVAILABLE = 701
 UPNP_ERROR_SEEK_MODE_NOT_SUPPORTED = 710
 
 # 需要使用 play_by_music_url 接口的设备型号
-# 同步自 songloft-plugin-miot (src/mina/constants.ts NEED_USE_PLAY_MUSIC_API)，
 # 含 LX04 等触屏型号，使 default_audio_id 指定的封面/歌词能在触屏音箱生效。
 # LX05A 补充自上游 MiAir。
 NEED_USE_PLAY_MUSIC_API = [

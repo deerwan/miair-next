@@ -28,6 +28,8 @@ class Orchestrator:
     def __init__(self, config: Config):
         self.config = config
         self.auth = AuthManager(config)
+        # 凭据经三级降级链自动恢复后重建 DLNA/AirPlay 服务的回调
+        self.auth.on_credentials_recovered = self._on_auth_recovered
         self.speaker_manager = SpeakerManager(config, self.auth)
         self.renderers: dict[str, DLNARenderer] = {}  # udn -> DLNARenderer
         self._did_to_udn: dict[str, str] = {}  # did -> udn
@@ -100,15 +102,38 @@ class Orchestrator:
 
         self._device_check_task = asyncio.create_task(self._periodic_device_check())
 
+    async def _on_auth_recovered(self):
+        """凭据由失效自动恢复后的回调: 重建 DLNA/AirPlay 服务
+
+        三级降级链 (尤其账号密码重登) 可能在 DLNA 已停摆期间恢复凭据,
+        此时必须重新拉起服务, 否则音箱在手机上仍然不可见。
+        """
+        if self.dlna_running:
+            return
+        log.info("检测到凭据已自动恢复, 正在重启 DLNA/AirPlay 服务 ...")
+        await self.restart_dlna_services()
+
     async def _start_dlna_services(self):
         """启动 DLNA 相关服务 (登录、初始化音箱、SSDP、HTTP)"""
         try:
             # 登录小米
             await self.auth.login()
 
+            # 登录失败时再走一次三级凭证降级链 (autoLoginAccount):
+            # passToken 换发 → 复用缓存 serviceToken → 账号密码重登。
+            # 旧实现在这里直接放弃, 导致 passToken 过期后唯有人工扫码才能恢复服务。
+            if not self.auth.is_logged_in():
+                log.warning("首次登录失败, 尝试用三级凭证降级链恢复 ...")
+                await self.auth.refresh_token(reason="启动恢复")
+
             # 检查登录状态
             if not self.auth.is_logged_in():
                 log.warning("登录失败, 无法启动 DLNA 服务")
+                # 仍启动续期任务: 只要持有任一凭证, 三级降级链就会在后续周期
+                # 继续尝试恢复, 成功后通过 on_credentials_recovered 回调自动
+                # 拉起服务, 无需人工扫码。
+                if self.auth._has_credentials():
+                    self.auth.start_token_refresh()
                 self._clear_runtime()
                 return
 
@@ -210,6 +235,7 @@ class Orchestrator:
             # 关闭并重新初始化 auth, 确保账号切换生效
             await self.auth.close()
             self.auth = AuthManager(self.config)
+            self.auth.on_credentials_recovered = self._on_auth_recovered
             self.speaker_manager = SpeakerManager(self.config, self.auth)
             # _start_dlna_services 内部已重启 AirPlay (先停旧再启新), 无需再次重启
             await self._start_dlna_services()

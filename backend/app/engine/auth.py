@@ -14,11 +14,19 @@ from app.engine.config import Config
 
 log = logging.getLogger("miair")
 
-# serviceToken 主动续期:
-# 定时检查, 当 serviceToken 年龄超过阈值时提前用 passToken 静默换发,
-# 避免运行期过期只能等调用失败才补救; 低频换发也不会触发小米风控。
-TOKEN_REFRESH_CHECK_INTERVAL = 2 * 3600  # 续期检查间隔 (秒)
-TOKEN_REFRESH_MAX_AGE = 9 * 3600  # serviceToken 超过此年龄则主动换发 (约 12 小时有效)
+# ---------- serviceToken 生命周期  ----------
+# serviceToken 假定有效期 (小时),  constants.SERVICE_TOKEN_VALID_HOURS
+SERVICE_TOKEN_VALID_HOURS = 12
+# 主动刷新阈值 (小时): 剩余有效期低于此值才换发
+# TOKEN_REFRESH_THRESHOLD_HOURS (即第 9 小时触发, 过期前留足余量)
+TOKEN_REFRESH_THRESHOLD_HOURS = 3
+# 续期检查间隔 (秒),  TOKEN_REFRESH_INTERVAL_MS
+TOKEN_REFRESH_CHECK_INTERVAL = 2 * 3600
+# 被动恢复最小间隔 (秒): 401 / "Login failed" 触发的恢复走这个闸门, 对齐
+# RELOGIN_MIN_INTERVAL_MS。防止 set_volume/play_url/stop 等并发调用
+# 在同一失效事件上各触发一次真实登录 (生产 issue: 短时间多次 serviceLogin
+# 被小米风控返回 70016, 且失败的登录会互相踩踏导致永久起不来)。
+RELOGIN_MIN_INTERVAL = 60
 # 登录成功后的宽限期 (秒): 期间 API 失败判定为临时问题 (冷却容忍),
 # 不推送 "登录失效" 通知, 避免网络抖动误报
 TRANSIENT_FAILURE_GRACE = 60
@@ -59,6 +67,10 @@ class AuthManager:
         self._last_login_ok_time = 0.0
         # serviceToken 最近换发/载入时间: 供主动续期判断年龄
         self._service_token_issued_at = 0.0
+        # 最近一次"被动恢复"尝试时间: 401/Login failed 触发的重登冷却闸门
+        self._last_relogin_time = 0.0
+        # 凭据由失效恢复为有效时的回调 (由 Orchestrator 注入, 用于重建服务)
+        self.on_credentials_recovered = None
         self._refresh_task: asyncio.Task | None = None
 
     async def login(self):
@@ -171,14 +183,13 @@ class AuthManager:
                 except Exception as e:
                     log.warning(f"缓存 serviceToken 失效, 转用 passToken 换发: {e}")
             if reused:
-                self._logged_in = True
-                self._last_login_ok_time = time.time()
                 # 缓存的 serviceToken 年龄未知, 以 .mi.token 文件修改时间近似,
                 # 供主动续期判断是否临近过期
                 try:
-                    self._service_token_issued_at = os.path.getmtime(token_store)
+                    issued_at = os.path.getmtime(token_store)
                 except OSError:
-                    self._service_token_issued_at = 0.0
+                    issued_at = time.time()
+                self._mark_login_ok(issued_at=issued_at)
                 log.info("使用 cookie 登录成功 (复用缓存 serviceToken, 未触发换发)")
             else:
                 try:
@@ -190,9 +201,7 @@ class AuthManager:
                         # session 无限重试导致连锁失败"。
                         ok = await self._relogin_with_fresh_session()
                     if ok:
-                        self._logged_in = True
-                        self._last_login_ok_time = time.time()
-                        self._service_token_issued_at = time.time()
+                        self._mark_login_ok()
                         # 小米可能在换发时轮换了 passToken, 同步回写配置避免重启后旧值覆盖
                         self._sync_pass_token_to_config()
                         log.info("使用 cookie 登录成功 (已换发 serviceToken)")
@@ -224,9 +233,10 @@ class AuthManager:
         else:
             try:
                 await self.account.login("micoapi")
-                self._logged_in = True
-                self._last_login_ok_time = time.time()
-                self._service_token_issued_at = time.time()
+                self._mark_login_ok()
+                # 账密登录会签发一份新的 passToken, 回写配置后: 后续续期可走
+                # passToken 级别, 且三级链的兜底凭证在重启后依然有效
+                self._sync_pass_token_to_config()
                 log.info("小米账号登录成功")
             except Exception as e:
                 self._logged_in = False
@@ -408,6 +418,319 @@ class AuthManager:
         """是否已成功登录"""
         return self._logged_in
 
+    # ---------- 凭证有效性校验 ----------
+
+    @staticmethod
+    def _is_login_error(exc: Exception) -> bool:
+        """判断异常是否属于「登录失效」(401 / Login failed / 70016)
+
+        MinaHTTPClient 对 401 的判定: 只有登录失效才触发恢复链,
+        网络超时等临时问题直接上抛交给调用方处理。
+        """
+        msg = str(exc)
+        # 不按 "401" 字面匹配: 设备 ID / 响应体里的数字可能恰好包含 401,
+        # 误判会让普通业务错误也走一遍重登流程。miservice 最终抛出的就是
+        # "Error {url}: Login failed", 前三个条件已完全覆盖。
+        return (
+            "Login failed" in msg
+            or "登录验证失败" in msg
+            or "Auth error" in msg
+        )
+
+    async def validate_token(self) -> bool:
+        """真实调用一次云端 API, 校验 serviceToken 是否仍有效
+
+        MinaHTTPClient.validateToken(): 必须直接判定底层响应,
+        不能复用 get_device_list() —— 后者把 401 / 网络失败兜底成 [] 返回,
+        会让失效的 token 被误判为有效, 造成「刷新链条持续假成功、既不提示
+        重登又持续 401」空列表同样代表请求成功, 属有效。
+        """
+        if self._closed or not self.mina_service or not self.account:
+            return False
+        try:
+            result = await self.mina_service.device_list()
+            return result is not None
+        except Exception as e:
+            log.info(f"serviceToken 校验未通过: {e}")
+            return False
+
+    def _has_credentials(self) -> bool:
+        """是否持有任一可用于恢复登录态的凭证"""
+        return bool(self.config.cookie or (self.config.account and self.config.password))
+
+    # ---------- 三级凭证降级链 (AuthService.refreshToken) ----------
+
+    async def refresh_token(self, reason: str = "定时续期") -> bool:
+        """按 passToken → serviceToken → 账号密码 的优先级恢复登录态
+
+        - 级别 1 passToken 换发: 只能换 serviceToken, 不会延长 passToken 自身,
+          因此它无法解决 passToken 过期 (生产 issue 的根因);
+        - 级别 2 复用缓存 serviceToken: 换发失败但旧 token 仍可用时继续使用,
+          避免一次网络抖动就把服务判死;
+        - 级别 3 账号密码重登: 唯一能重新签发 passToken 的手段, 是长期免人工
+          维护的关键 (autoLoginWithPassword)。
+
+        每级成功后都会真实校验一次, 杜绝「假成功」。
+
+        整体串行化: 定时器续期与 API 401 恢复可能同时发生, 共用一个锁避免
+        并发换发 (短时间多次 serviceLogin 会触发小米风控 70016)。
+        """
+        async with self._login_lock:
+            was_logged_in = self._logged_in
+
+            if await self._refresh_by_pass_token():
+                log.info(f"登录态已恢复 ({reason}): passToken 换发 serviceToken 成功")
+                self._fire_recovered_callback(was_logged_in)
+                return True
+
+            if await self._reuse_service_token():
+                log.info(f"登录态已恢复 ({reason}): 缓存 serviceToken 仍有效, 直接复用")
+                self._fire_recovered_callback(was_logged_in)
+                return True
+
+            if await self._login_by_password():
+                log.info(f"登录态已恢复 ({reason}): 账号密码重登成功 (已重新签发 passToken)")
+                self._fire_recovered_callback(was_logged_in)
+                return True
+
+            log.error(
+                f"登录态恢复失败 ({reason}): "
+                "passToken / serviceToken / 账号密码 三种方式均失败"
+            )
+            self._notify_login_expired(
+                "passToken、缓存 serviceToken 与账号密码三种恢复方式均已失败"
+            )
+            return False
+
+    def _fire_recovered_callback(self, was_logged_in: bool):
+        """凭据从失效恢复为有效时通知上层 (供重建 DLNA/AirPlay 服务)
+
+        AuthManager 只管凭据; 由 Orchestrator 注入回调决定是否重建服务。
+        """
+        if was_logged_in or self.on_credentials_recovered is None:
+            return
+        try:
+            asyncio.create_task(self._call_recovered_callback())
+        except RuntimeError:
+            log.warning("凭据恢复回调未启动: 当前无事件循环")
+
+    async def _call_recovered_callback(self):
+        try:
+            await self.on_credentials_recovered()
+        except Exception as e:
+            log.warning(f"凭据恢复回调执行异常: {e}")
+
+    async def _refresh_by_pass_token(self) -> bool:
+        """级别 1: 用 passToken 换发 serviceToken (换发后强制校验)"""
+        credentials = self._load_pass_token()
+        if not credentials:
+            log.info("无可用 passToken, 跳过 passToken 换发")
+            return False
+        user_id, pass_token = credentials
+
+        # miservice login() 失败时会删除 .mi.token 文件, 先备份以便失败时还原
+        backup = self._backup_token_file()
+        session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+        )
+        try:
+            account = MiAccount(session, "", "", token_store=self.config.mi_token_home)
+            # 直接注入凭据而非依赖 .mi.token 文件: 文件可能在上一次失败登录中
+            # 被 miservice 删除, 仅靠文件加载会导致失败一次后永远换发不了。
+            account.token = {
+                "userId": user_id,
+                "passToken": pass_token,
+                "deviceId": "miair_device",
+            }
+            ok = await account.login("micoapi")
+        except Exception as e:
+            log.warning(f"passToken 换发异常: {e}")
+            ok = False
+
+        if not ok:
+            log.warning("passToken 换发失败 (passToken 可能已过期或被吊销), 转入下一级")
+            self._restore_token_file(backup)
+            await self._close_session_quietly(session)
+            return False
+
+        self._install_account(session, account)
+        # 换发返回成功 ≠ token 可用, 必须真调一次云端校验
+        if not await self.validate_token():
+            log.warning("passToken 换发后校验未通过, 判定为无效凭据")
+            self._restore_token_file(backup)
+            return False
+
+        self._mark_login_ok()
+        self._sync_pass_token_to_config()
+        return True
+
+    async def _reuse_service_token(self) -> bool:
+        """级别 2: 缓存的 serviceToken 仍有效则直接复用 (autoLoginWithToken)"""
+        if not (self.account and self.account.token and self.account.token.get("micoapi")):
+            return False
+        if not await self.validate_token():
+            return False
+        self._logged_in = True
+        self._last_login_ok_time = time.time()
+        return True
+
+    async def _login_by_password(self) -> bool:
+        """级别 3: 用账号密码重新登录, 重新签发 passToken + serviceToken
+
+        这是唯一能打破「passToken 自身过期」的手段: passToken 换发只换
+        serviceToken, 不会延长 passToken; 账密登录会让小米重新下发一份。
+        扫码登录的账号若未配置账号密码, 这一级不可用 (此时仍需用户重新扫码)。
+        """
+        if not (self.config.account and self.config.password):
+            log.warning(
+                "未配置小米账号密码, 无法用账号密码兜底重登。"
+                "扫码登录的账号请在管理后台「账号配置」补填账号密码作为兜底凭证"
+            )
+            return False
+
+        log.info("passToken 与缓存 serviceToken 均失效, 尝试用账号密码重新登录 ...")
+        session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+        )
+        try:
+            account = MiAccount(
+                session,
+                self.config.account,
+                self.config.password,
+                token_store=self.config.mi_token_home,
+            )
+            ok = await account.login("micoapi")
+        except Exception as e:
+            log.warning(f"账号密码重登异常: {e}")
+            ok = False
+
+        if not ok:
+            log.warning("账号密码登录失败 (可能需要滑块/短信验证码, 或账号密码已变更)")
+            await self._close_session_quietly(session)
+            return False
+
+        self._install_account(session, account)
+        if not await self.validate_token():
+            log.warning("账号密码登录后校验未通过")
+            return False
+
+        self._mark_login_ok()
+        # 重新签发的 passToken 必须回写配置, 否则重启后仍用旧值
+        self._sync_pass_token_to_config()
+        return True
+
+    async def handle_token_expired(self) -> bool:
+        """401 / Login failed 的统一恢复入口 (handleTokenExpired)
+
+        带 60s 冷却: 同一次失效事件上并发的 set_volume / play_url / stop 只会
+        触发一次真实恢复动作, 其余直接跳过, 避免重登风暴触发小米风控 70016。
+        """
+        elapsed = time.time() - self._last_relogin_time
+        if self._last_relogin_time and elapsed < RELOGIN_MIN_INTERVAL:
+            log.info(
+                f"凭据恢复跳过: 距上次尝试仅 {elapsed:.0f}s "
+                f"(冷却 {RELOGIN_MIN_INTERVAL}s, 防止重登风暴)"
+            )
+            return False
+        self._last_relogin_time = time.time()
+        return await self.refresh_token(reason="检测到登录失效")
+
+    async def call_api(self, factory, label: str = ""):
+        """执行小米云 API, 遇登录失效自动恢复凭据并重试一次
+
+        MinaHTTPClient.doPostRequest()
+        401 → onTokenExpired → 刷新成功则重试原请求。
+
+        factory 是无参可调用对象 (返回协程): 重试时需要重新构造调用,
+        保证拿到刷新后重建的 mina_service。
+        """
+        try:
+            return await factory()
+        except Exception as e:
+            if not self._is_login_error(e):
+                raise
+            log.warning(f"{label or '小米云 API'} 返回登录失效 ({e}), 尝试恢复凭据后重试")
+            if not await self.handle_token_expired():
+                raise
+            return await factory()
+
+    # ---------- 内部工具 ----------
+
+    def _load_pass_token(self) -> tuple[str, str] | None:
+        """取得可用的 (userId, passToken): 优先 config.cookie, 回退 .mi.token
+
+        账密登录场景 passToken 可能只落在 .mi.token 里 (config.cookie 为空)。
+        """
+        token_data = parse_cookie_string(self.config.cookie or "")
+        if token_data.get("userId") and token_data.get("passToken"):
+            return token_data["userId"], token_data["passToken"]
+        try:
+            with open(self.config.mi_token_home, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return None
+        if data.get("userId") and data.get("passToken"):
+            return str(data["userId"]), str(data["passToken"])
+        return None
+
+    def _install_account(self, session, account):
+        """装载新的 session/account 并重建服务句柄
+
+        调用方全部通过 self.mina_service / self.miio_service 动态访问, 替换后
+        对所有持有 auth 引用的 controller 立即生效 (刷新后
+        client.updateTokenInfo 的同步语义)。
+        """
+        old_session = self.session
+        self.session = session
+        self.account = account
+        self.mina_service = MiNAService(account)
+        self.miio_service = MiIOService(account)
+        if (
+            old_session is not None
+            and old_session is not session
+            and not old_session.closed
+        ):
+            asyncio.create_task(self._close_session_quietly(old_session))
+
+    def _mark_login_ok(self, issued_at: float | None = None):
+        """记录登录/换发成功状态与 serviceToken 过期时间
+
+        issued_at 允许传入: 复用缓存 serviceToken 时真实签发时间未知, 以
+        .mi.token 文件修改时间近似, 否则按当前时间计算。
+        """
+        now = time.time()
+        issued = issued_at if issued_at else now
+        self._logged_in = True
+        self._last_login_ok_time = now
+        self._service_token_issued_at = issued
+        self.config.token_expires_at = issued + SERVICE_TOKEN_VALID_HOURS * 3600
+        try:
+            self.config.save()
+        except Exception as e:
+            log.warning(f"保存 token 过期时间失败: {e}")
+
+    @staticmethod
+    async def _close_session_quietly(session):
+        try:
+            await session.close()
+        except Exception:
+            pass
+
+    def _notify_login_expired(self, detail: str):
+        """推送登录失效通知 (notify 内部同事件 1 小时节流)"""
+        try:
+            from app.engine.notify import notify_async
+
+            notify_async(
+                self.config,
+                "login_expired",
+                "[MiAir Next] 小米登录已失效",
+                f"{detail}。\n请到管理后台重新扫码登录, "
+                "或配置小米账号密码让服务自动恢复。",
+            )
+        except Exception as e:
+            log.warning(f"推送登录失效通知失败: {e}")
+
     # ---------- serviceToken 主动续期 ----------
 
     def start_token_refresh(self):
@@ -428,42 +751,39 @@ class AuthManager:
             self._refresh_task = None
 
     async def _token_refresh_loop(self):
-        """定期用 passToken 提前换发 serviceToken, 避免运行期过期
+        """定期检查 serviceToken 剩余有效期, 临近过期时走三级降级链恢复
 
-        serviceToken 约 12 小时有效; 每 2 小时检查一次, 年龄超过 9 小时才换发:
-        低频不触发风控, 且在过期前留足余量。换发失败时恢复备份的 .mi.token ——
-        miservice login() 失败可能清掉缓存, 不能让仍在生效的旧缓存陪葬。
+        AuthService.startTokenRefresh + refreshToken: 每 2 小时
+        检查一次, 剩余有效期低于 3 小时才动作; 成功后更新 config.token_expires_at
+        落盘, 进程重启也能接着计算剩余时间。
+
+        注意这里**不**以「当前已登录」为前置条件: 一旦 serviceToken 过期且
+        尚未被任何调用发现, 定时器仍会持续尝试恢复(账密兜底), 避免像旧实现
+        那样因 _logged_in=false 而让续期任务永久空转。
         """
+        threshold = TOKEN_REFRESH_THRESHOLD_HOURS * 3600
         try:
             while not self._closed:
                 await asyncio.sleep(TOKEN_REFRESH_CHECK_INTERVAL)
-                if self._closed or not self._logged_in or not self.config.cookie:
-                    continue  # 仅 cookie 登录场景有 passToken 可续期
-                age = time.time() - self._service_token_issued_at
-                if age < TOKEN_REFRESH_MAX_AGE:
+                if self._closed or not self._has_credentials():
+                    continue  # 无任何凭证时不打扰用户
+
+                remaining = self.config.token_expires_at - time.time()
+                if remaining > threshold:
                     continue
-                async with self._login_lock:
-                    if self._closed or not self._logged_in or not self.account:
-                        continue
+
+                if remaining <= 0:
+                    log.info("serviceToken 已过期, 主动恢复登录态 ...")
+                else:
                     log.info(
-                        f"serviceToken 已使用 {age / 3600:.1f}h, "
-                        "主动用 passToken 续期..."
+                        f"serviceToken 剩余 {remaining / 3600:.1f}h "
+                        f"(低于 {TOKEN_REFRESH_THRESHOLD_HOURS}h 阈值), 主动续期 ..."
                     )
-                    backup = self._backup_token_file()
-                    try:
-                        ok = await self.account.login("micoapi")
-                    except Exception as e:
-                        log.warning(f"serviceToken 续期异常: {e}")
-                        ok = False
-                    if ok:
-                        self._service_token_issued_at = time.time()
-                        self._last_login_ok_time = time.time()
-                        # 续期换发同样可能轮换 passToken, 需回写配置保持凭据最新
-                        self._sync_pass_token_to_config()
-                        log.info("serviceToken 续期成功")
-                    else:
-                        log.warning("serviceToken 续期失败, 保留旧缓存等待下轮重试")
-                        await self._restore_token_after_failed_refresh(backup)
+                # 锁由 refresh_token 内部持有 (它与 API 401 恢复共用一把锁),
+                # 这里不能再加锁, 否则 asyncio.Lock 不可重入会死锁
+                if self._closed or not self._has_credentials():
+                    continue
+                await self.refresh_token(reason="定时续期")
         except asyncio.CancelledError:
             pass
 
@@ -499,46 +819,22 @@ class AuthManager:
         except OSError:
             return None
 
-    async def _restore_token_after_failed_refresh(self, backup: bytes | None):
-        """续期失败后恢复 .mi.token 并重建 session/account
+    def _restore_token_file(self, backup: bytes | None):
+        """换发失败后还原 .mi.token 文件
 
-        miservice login() 失败时可能把 account.token 置 None / 清掉文件,
-        旧缓存被毁会导致后续调用连锁失败; 恢复备份让仍有效的旧
-        serviceToken 继续可用。
+        miservice login() 失败时会把 token 置 None 并删除该文件; 若磁盘上仍
+        有一份可能有效的旧 serviceToken, 就不该让它陪葬 —— 还原后进程重启
+        仍有机会直接复用。内存态由三级降级链负责重建, 这里只管文件。
         """
+        if backup is None:
+            return
         token_home = self.config.mi_token_home
-        if backup is not None:
-            try:
-                os.makedirs(os.path.dirname(token_home), exist_ok=True)
-                with open(token_home, "wb") as f:
-                    f.write(backup)
-            except OSError as e:
-                log.warning(f"恢复 .mi.token 失败: {e}")
         try:
-            # 重建 session 与 account, 丢弃可能被污染的内存状态
-            old_session = self.session
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
-            )
-            if old_session and not old_session.closed:
-                try:
-                    await old_session.close()
-                except Exception:
-                    pass
-            self.account = MiAccount(self.session, "", "", token_store=token_home)
-            if not self.account.token:
-                token_data = parse_cookie_string(self.config.cookie or "")
-                if token_data.get("userId") and token_data.get("passToken"):
-                    self.account.token = {
-                        "userId": token_data["userId"],
-                        "passToken": token_data["passToken"],
-                        "deviceId": "miair_device",
-                    }
-            # 基于恢复后的 account 重建服务句柄 (SpeakerController 通过动态属性访问)
-            self.mina_service = MiNAService(self.account)
-            self.miio_service = MiIOService(self.account)
-        except Exception as e:
-            log.warning(f"续期失败后重建 account 异常: {e}")
+            os.makedirs(os.path.dirname(token_home), exist_ok=True)
+            with open(token_home, "wb") as f:
+                f.write(backup)
+        except OSError as e:
+            log.warning(f"恢复 .mi.token 失败: {e}")
 
     async def close(self):
         """关闭 session"""

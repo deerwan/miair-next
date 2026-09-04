@@ -32,3 +32,27 @@ export async function pollQRCode(sessionId: string): Promise<QRPollResult> {
   })
   return data
 }
+
+export type AccountStatusLevel = 'offline' | 'expired' | 'expiring' | 'healthy'
+
+export interface AccountStatus {
+  user_id: string
+  logged_in: boolean
+  status: AccountStatusLevel
+  service_token_remaining_hours: number | null
+  has_password_fallback: boolean
+  token_refresh_running: boolean
+  has_account: boolean
+}
+
+/** 当前小米账号登录状态 (状态卡展示用) */
+export async function fetchAccountStatus(): Promise<AccountStatus> {
+  const { data } = await http.get('/account/status')
+  return data
+}
+
+/** 删除账号: 清空所有凭证并热重启服务, 回到未配置状态 */
+export async function deleteAccount(): Promise<{ ok: boolean; message: string }> {
+  const { data } = await http.delete('/account')
+  return data
+}
