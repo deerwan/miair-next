@@ -61,8 +61,9 @@ class Orchestrator:
             return []
 
     async def _periodic_device_check(self):
-        """每分钟自主检查设备列表, 如果为空且启动超过5分钟, 则触发重启"""
+        """每分钟自主检查设备列表, 连续3次为空且启动超过5分钟才触发重启"""
         start_time = time.time()
+        empty_count = 0
         while True:
             await asyncio.sleep(60)
 
@@ -78,11 +79,16 @@ class Orchestrator:
             try:
                 devices = await self.get_all_devices()
                 if not devices:
-                    log.error("定期检查发现设备列表突然为空, 判定为故障, 触发自动重启以恢复服务...")
-                    try:
-                        asyncio.get_running_loop().call_soon(_restart_process)
-                    except RuntimeError:
-                        _restart_process()
+                    empty_count += 1
+                    log.warning(f"定期检查设备列表为空 (连续第 {empty_count} 次)")
+                    if empty_count >= 3:
+                        log.error("设备列表连续3次为空, 判定为故障, 触发自动重启以恢复服务...")
+                        try:
+                            asyncio.get_running_loop().call_soon(_restart_process)
+                        except RuntimeError:
+                            _restart_process()
+                else:
+                    empty_count = 0
             except Exception as e:
                 log.warning(f"定期检查设备列表异常: {e}")
 

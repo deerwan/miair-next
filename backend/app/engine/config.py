@@ -221,7 +221,7 @@ class Config:
         return result
 
     def save(self):
-        """保存配置到文件（线程安全）"""
+        """保存配置到文件（线程安全，原子写入防损坏）"""
         with self._save_lock:
             os.makedirs(self.conf_path, exist_ok=True)
             data = asdict(self)
@@ -234,8 +234,16 @@ class Config:
                     speakers_data[did] = speaker
             data["speakers"] = speakers_data
 
-            with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            tmp_file = self.config_file + ".tmp"
+            try:
+                with open(tmp_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_file, self.config_file)  # 原子替换
+            except Exception:
+                # 清理临时文件，避免残留
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+                raise
             self._restrict_sensitive_file_perms()
 
     def _restrict_sensitive_file_perms(self) -> None:

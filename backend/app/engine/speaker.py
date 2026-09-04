@@ -16,8 +16,6 @@ log = logging.getLogger("miair")
 class SpeakerController:
     """单个小爱音箱的控制接口"""
 
-    # 连续登录失败计数（所有实例共享，因为登录状态是全局的）
-    _consecutive_login_failures: int = 0
     _LOGIN_FAILURE_RESTART_THRESHOLD = 6  # 连续失败 6 次后触发重启
 
     def __init__(self, speaker: Speaker, auth: AuthManager, config: Config | None = None):
@@ -25,6 +23,7 @@ class SpeakerController:
         self.auth = auth
         self.config = config
         self._last_volume: int = 50  # 用于 unmute 恢复
+        self.consecutive_login_failures: int = 0  # 实例级计数，避免多音箱共享干扰
 
     def _default_audio_id(self) -> str:
         """小米云路线默认封面 audioID。
@@ -37,11 +36,11 @@ class SpeakerController:
         return DEFAULT_AUDIO_ID
 
     @classmethod
-    def _check_and_trigger_restart(cls, config=None):
+    def _check_and_trigger_restart(cls, config=None, failure_count: int = 0):
         """检查连续登录失败次数，达到阈值时触发进程重启"""
-        if cls._consecutive_login_failures >= cls._LOGIN_FAILURE_RESTART_THRESHOLD:
+        if failure_count >= cls._LOGIN_FAILURE_RESTART_THRESHOLD:
             log.error(
-                f"连续 {cls._consecutive_login_failures} 次登录失败，正在重启程序以恢复服务..."
+                f"连续 {failure_count} 次登录失败，正在重启程序以恢复服务..."
             )
             # 重启前推送通知, 让自愈动作对用户可见
             if config is not None:
@@ -50,7 +49,7 @@ class SpeakerController:
                     config,
                     "auto_restart",
                     "[MiAir Next] 服务即将自动重启",
-                    f"连续 {cls._consecutive_login_failures} 次登录失败, 服务将自动重启以尝试恢复。"
+                    f"连续 {failure_count} 次登录失败, 服务将自动重启以尝试恢复。"
                     "若重启后仍收到此通知, 请到管理后台重新登录。",
                 )
             from app.engine.restart import _restart_process
@@ -231,11 +230,11 @@ class SpeakerController:
             return True
         except Exception as e:
             log.error(f"stop 失败: {e}")
-            # call_api 已尝试过三级降级链恢复, 走到这里说明凭据确实无法恢复,
+            # 走到这里说明凭据确实无法恢复,
             # 才累计故障计数 (单次抖动不会误触发自动重启)
             if AuthManager._is_login_error(e):
-                SpeakerController._consecutive_login_failures += 1
-                SpeakerController._check_and_trigger_restart(self.auth.config)
+                self.consecutive_login_failures += 1
+                SpeakerController._check_and_trigger_restart(self.auth.config, self.consecutive_login_failures)
             return False
 
     async def set_volume(self, volume: int) -> bool:
@@ -308,8 +307,8 @@ class SpeakerController:
             # call_api 内部已尝试三级降级链恢复, 走到这里说明凭据确实无法恢复,
             # 才累计故障计数 (网络抖动不会误触发自动重启)
             if AuthManager._is_login_error(e):
-                SpeakerController._consecutive_login_failures += 1
-                SpeakerController._check_and_trigger_restart(self.auth.config)
+                self.consecutive_login_failures += 1
+                SpeakerController._check_and_trigger_restart(self.auth.config, self.consecutive_login_failures)
             # 向上抛出异常，让调用者（如 DeviceServer 的轮询任务）捕获并忽略本次轮询
             raise Exception(f"get_status 失败: {e}")
 

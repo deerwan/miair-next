@@ -23,9 +23,9 @@ export function setupGuard(router: Router) {
         return { name: 'login' }
       }
     }
-    // 已有 token: 异步从后端 /me 拉取真实用户名, 让顶栏显示正确
+    // 已有 token: 等待后端 /me 拉取用户名, 确保顶栏实时显示
     if (!auth.username) {
-      void auth.refreshUser()
+      await auth.refreshUser()
     }
     return true
   })

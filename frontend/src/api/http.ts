@@ -16,11 +16,18 @@ http.interceptors.request.use((config) => {
   return config
 })
 
-// 401 统一踢回登录页
+// 401 统一踢回登录页（防并发重复踢出）
+let isLoggingOut = false
+
 http.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    // 请求成功时重置锁定标志
+    isLoggingOut = false
+    return resp
+  },
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !isLoggingOut) {
+      isLoggingOut = true
       const auth = useAuthStore()
       auth.logout()
       if (router.currentRoute.value.name !== 'login') {
