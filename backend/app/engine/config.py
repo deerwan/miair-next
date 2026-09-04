@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
+
+log = logging.getLogger("miair")
 
 
 @dataclass
@@ -233,6 +236,20 @@ class Config:
 
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            self._restrict_sensitive_file_perms()
+
+    def _restrict_sensitive_file_perms(self) -> None:
+        """收紧敏感文件权限 (尽力而为): config.json 含明文账号密码 / Cookie,
+        .mi.token 含 serviceToken。miservice 的 save_token() 会删除重建
+        .mi.token 导致权限回落, 故每次保存配置时都重新收紧;
+        Windows / 特殊文件系统上 chmod 可能无效, 忽略失败。
+        """
+        for path in (self.config_file, self.mi_token_home):
+            try:
+                if os.path.exists(path):
+                    os.chmod(path, 0o600)
+            except OSError as e:
+                log.warning(f"收紧文件权限失败 {path}: {e}")
 
     @classmethod
     def load(cls, conf_path: str = "conf") -> "Config":

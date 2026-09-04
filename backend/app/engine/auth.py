@@ -143,6 +143,11 @@ class AuthManager:
                     new_token["micoapi"] = existing_token["micoapi"]
                 with open(token_home, "w") as f:
                     json.dump(new_token, f, indent=2)
+                # 文件含 passToken/serviceToken, 立即收紧权限 (miservice 重建后会回落)
+                try:
+                    os.chmod(token_home, 0o600)
+                except OSError:
+                    pass
             except Exception as e:
                 log.warning(f"预写 .mi.token 失败: {e}")
 

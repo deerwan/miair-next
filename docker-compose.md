@@ -1,3 +1,7 @@
+
+```yaml
+version: '3'
+
 services:
   miair-next:
     # 官方镜像 (Docker Hub, CI 自动构建发布); 本地开发可改为 build: .

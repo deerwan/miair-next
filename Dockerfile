@@ -13,7 +13,7 @@ FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="MiAir Next"
 LABEL org.opencontainers.image.description="Make Xiaomi AI speakers act as DLNA / AirPlay renderers, with a modern admin panel"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 # 协议层依赖: ffmpeg (av 音频转码), libportaudio2, dnsutils
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,5 +45,10 @@ VOLUME ["/app/data"]
 # 8300: Web 管理后台 / API
 # DLNA (SSDP 1900/udp) 与 AirPlay (mDNS 5353/udp) 需要 host 网络, 见 README
 EXPOSE 8300
+
+# 健康检查: /api/v1/health 无需鉴权; 镜像内无 curl, 用 python 标准库探测
+# (uvicorn 在 lifespan 启动完成后才监听端口, start-period 给编排器留启动时间)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('MIAIR_WEB_PORT', '8300') + '/api/v1/health', timeout=4)"
 
 ENTRYPOINT ["python", "run.py"]

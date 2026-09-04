@@ -4,7 +4,7 @@
 
 本项目在 [MiAir](https://github.com/KiriChen-Wind/MiAir) 协议层的基础上重构：后端改用 **FastAPI**，前端使用 **Vue 3 + Vite + Naive UI** 自建轻量管理后台，通过 GitHub Actions 云端构建多架构 Docker 镜像，一条命令即可部署。
 
-![preview](img/preview.png)
+![preview](img/image.png)
 
 ---
 
@@ -54,6 +54,23 @@ docker run -d \
 | [部署与配置](docs/deployment.md) | 安装方式、manage.sh 管理脚本、镜像标签策略、数据目录、环境变量、升级 |
 | [接口文档](docs/api.md) | REST / WebSocket 接口清单、鉴权说明、快速验证 |
 | [本地开发](docs/development.md) | 前后端启动、测试、构建镜像、发版流程、项目结构 |
+
+---
+
+## 📄 许可证
+
+本项目以 **GPL-3.0-or-later** 发布，详见 [LICENSE](LICENSE)。
+
+协议引擎包含 / 衍生自以下第三方代码，各组件许可：
+
+| 组件 | 来源 | 原许可 |
+| --- | --- | --- |
+| `engine/airplay/fairplay3.py`、`engine/airplay/dxxp.py` | systemcrash（OmgHax） | GPL-2.0 |
+| `engine/airplay/server.py`、`pairing/`、`connections/` | [airplay2-receiver](https://github.com/openairplay/airplay2-receiver)（简化改写） | Apache-2.0 |
+| `engine/airplay/airplay1.py` | Airport Express 公开密钥实现 | LGPL-2.0+ |
+| DLNA / 小米云引擎层 | [MiAir](https://github.com/KiriChen-Wind/MiAir)（移植） | MIT |
+
+> 引擎同时包含 Apache-2.0 与 GPL 系代码，故整体按 GPL-3.0-or-later 分发（与同样内置 fairplay3 组件的 [Macast](https://github.com/xfangfang/Macast) 做法一致）。
 
 ---
 
