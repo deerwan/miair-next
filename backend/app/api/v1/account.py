@@ -54,7 +54,7 @@ async def poll_qrcode(
         if cookie:
             config.cookie = cookie
             # 注意: 这里不再清空 config.account / config.password。
-            # 账号密码是三级凭证降级链的兜底凭证 : passToken 
+            # 账号密码是三级凭证降级链的兜底凭证 : passToken
             # 约 24h 硬有效期且换发不会延长它, 一旦过期只有账密重登能重新签发。
             # 保留账密后, 扫码登录的账号也能在 passToken 失效时自动恢复。
             # 同步把 userId/passToken 写入 miservice 的 token 文件 (.mi.token),
