@@ -10,6 +10,11 @@ updates:
       prefix: "ci"
     labels:
       - "dependencies"
+    # Actions 版本升级合为一个 PR, 避免刷屏
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "pip"
     directory: "/backend"
@@ -19,7 +24,11 @@ updates:
       prefix: "build"
     labels:
       - "dependencies"
-    # miservice-fork 已用 ~=2.9.3 约束, 升级 PR 人工确认后再合
+    groups:
+      python-deps:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -29,3 +38,22 @@ updates:
       prefix: "build"
     labels:
       - "dependencies"
+    # minor/patch 合为一个 PR, 减少合并噪音
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # 工具链大版本升级互相耦合且需人工迁移测试, 不自动开 PR;
+      # 想升级时移除对应 ignore 规则或手动升
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vue-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vue-tsc"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pinia"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-vue"
+        update-types: ["version-update:semver-major"]

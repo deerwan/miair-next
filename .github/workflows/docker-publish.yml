@@ -11,6 +11,15 @@ on:
       - 'docs/**'
       - '.gitignore'
       - 'img/**'
+  # PR 门禁: 只跑 test 关卡 (build/release 有 event_name 条件, PR 不发镜像)
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'img/**'
   workflow_dispatch:
 
 env:
@@ -64,6 +73,8 @@ jobs:
 
   build:
     needs: test
+    # PR 只跑 test 门禁, 不构建/推送镜像
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
