@@ -1,6 +1,6 @@
 """MiAir 常量定义"""
 
-VERSION = "0.5.8"
+VERSION = "0.5.9"
 
 
 # SSDP 相关

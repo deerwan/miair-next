@@ -75,7 +75,21 @@ class JitterBuffer:
     def pop(self, seq: int) -> tuple[int, bytes] | None:
         """取出并删除指定 seq 的包。"""
         pkt = self._packets.pop(seq, None)
+        if pkt is not None:
+            self._forget(seq)
         return pkt
+
+    def _forget(self, seq: int) -> None:
+        """从淘汰队列同步移除。
+
+        正常按序播放时 _packets 即取即走、达不到 _max_size 上限,
+        淘汰分支永不执行; 若 pop/drain 不清理 _order, 它会以包速率
+        (~125/s) 无界增长, 长时间播放每天泄漏数百 MB。
+        """
+        try:
+            self._order.remove(seq)
+        except ValueError:
+            pass
 
     def drain(self, start_seq: int) -> list[tuple[int, int, bytes]]:
         """从 start_seq 开始按序取出连续的包，遇到缺口停止。
@@ -84,6 +98,7 @@ class JitterBuffer:
         seq = start_seq
         while seq in self._packets:
             ts, payload = self._packets.pop(seq)
+            self._forget(seq)
             result.append((seq, ts, payload))
             seq = (seq + 1) & 0xFFFF
         return result

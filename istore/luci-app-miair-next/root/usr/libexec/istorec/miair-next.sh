@@ -42,11 +42,10 @@ start() {
         --name=miair-next \
         --network=host \
         --restart=unless-stopped \
-        -v "$config_path":/config \
-        -v /mnt:/mnt \
-        $(mountpoint -q /mnt && echo "--mount type=bind,source=/mnt,target=/mnt,bind-propagation=rslave") \
+        -v "$config_path":/app/data \
+        $(mountpoint -q /mnt && echo "-v /mnt:/mnt:rslave" || echo "-v /mnt:/mnt") \
         -e TZ=Asia/Shanghai \
-        -e PORT=$port \
+        -e MIAIR_WEB_PORT=$port \
         $image_name
     echo "[$LOGTIME] Container miair-next created"
 }

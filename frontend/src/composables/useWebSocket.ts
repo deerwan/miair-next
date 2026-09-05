@@ -27,8 +27,12 @@ export function useWebSocket() {
   const logLines = ref<string[]>([])
   let ws: WebSocket | null = null
   let retryTimer: number | null = null
+  // 组件卸载标志: disconnect() 关闭的连接稍后仍会触发 onclose,
+  // 不短路的话每进一次页面就泄漏一条每 3 秒自动重连的幽灵连接
+  let disposed = false
 
   function connect() {
+    if (disposed) return
     const auth = useAuthStore()
     if (!auth.token) return
 
@@ -53,6 +57,7 @@ export function useWebSocket() {
     }
     ws.onclose = (ev) => {
       connected.value = false
+      if (disposed) return
       // 4401: token 无效/过期, 不再重连, 清登录态回登录页 (避免无限重连被拒)
       if (ev.code === 4401) {
         const auth = useAuthStore()
@@ -69,6 +74,7 @@ export function useWebSocket() {
   }
 
   function disconnect() {
+    disposed = true
     if (retryTimer) clearTimeout(retryTimer)
     ws?.close()
     ws = null

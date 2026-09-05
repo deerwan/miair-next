@@ -19,6 +19,9 @@ _UA = (
 _DOWNLOAD_THREADS = 8  # 并发下载线程数
 _CHUNK_SIZE = 1024 * 1024  # 每个分块大小 1MB
 _MIN_SIZE_FOR_MULTI_THREAD = 5 * 1024 * 1024  # 最小5MB才使用多线程
+# 单文件下载硬上限: 媒体代理端点无鉴权, 远端 Content-Length 不可信
+# (恶意/异常服务器可声明超大值), 预分配与下载循环必须限流防 OOM
+_MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024
 
 
 class MediaBuffer:
@@ -79,7 +82,13 @@ class MediaBuffer:
             # 如果HEAD请求没有明确支持Range，尝试发送一个测试Range请求
             if not self._supports_range and self.total_size > _MIN_SIZE_FOR_MULTI_THREAD:
                 self._supports_range = await self._test_range_support(session)
-            
+
+            # 预分配前校验硬上限 (bytearray(total_size) 是一次性分配, 不设防可被单请求打爆)
+            if self.total_size > _MAX_DOWNLOAD_SIZE:
+                self.error = f"文件过大 ({self.total_size} bytes > 上限 {_MAX_DOWNLOAD_SIZE})"
+                log.error(f"拒绝下载: {self.error}, url={self.remote_url[:80]}...")
+                return
+
             # 根据文件大小和服务器支持情况选择下载方式
             if (self._supports_range and 
                 self.total_size > _MIN_SIZE_FOR_MULTI_THREAD):
@@ -140,7 +149,12 @@ class MediaBuffer:
                 self.error = f"HTTP {resp.status}"
                 return
 
+            # 无 Content-Length 时长度未知, 必须在循环内限流 (无限流可撑爆内存)
             async for chunk in resp.content.iter_chunked(65536):
+                if len(self.data) + len(chunk) > _MAX_DOWNLOAD_SIZE:
+                    self.error = f"下载超过大小上限 ({_MAX_DOWNLOAD_SIZE} bytes), 已中止"
+                    log.error(f"{self.error}, url={self.remote_url[:80]}...")
+                    return
                 self.data.extend(chunk)
 
         if not self.total_size:
@@ -186,9 +200,22 @@ class MediaBuffer:
                         if resp.status not in (200, 206):
                             log.error(f"分块下载失败: HTTP {resp.status}")
                             return False
-                        
+
+                        # 只读请求区间大小的数据并探测是否越界:
+                        # 服务器无视 Range 回全量响应时, resp.read() 会把整个文件
+                        # 读进单个分块 (8 个并发分块可放大出数倍内存峰值)
+                        expected = end - start + 1
+                        chunk_data = await resp.content.read(expected)
+                        if len(chunk_data) < expected:
+                            log.error(f"分块数据不足 ({len(chunk_data)}/{expected})")
+                            return False
+                        if await resp.content.read(1):
+                            log.error(
+                                "服务器未正确支持 Range (响应超出请求区间), 放弃该分块"
+                            )
+                            return False
+
                         # 读取数据并写入缓冲区（加锁保护）
-                        chunk_data = await resp.read()
                         with write_lock:
                             self.data[start:start + len(chunk_data)] = chunk_data
                         return True
