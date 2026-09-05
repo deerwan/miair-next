@@ -51,8 +51,11 @@ def setup_logging(verbose: bool, log_file: str | None = None):
     logger = logging.getLogger(LOG_NAME)
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)
 
-    # 抑制 asyncio / aiohttp 内部的连接断开噪音日志
-    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+    # 抑制 asyncio / aiohttp 内部的连接断开噪音日志。
+    # 注意: asyncio logger 只压到 ERROR 而非静音——"Task exception was
+    # never retrieved" 等未捕获任务异常是排查后台任务崩溃的关键信号
+    # (曾借此定位过登录自愈假死), 全局关掉会让任务静默死亡不可见。
+    logging.getLogger("asyncio").setLevel(logging.ERROR)
     logging.getLogger("aiohttp.server").setLevel(logging.WARNING)
 
     if logger.handlers:

@@ -1,0 +1,31 @@
+# 依赖自动更新: Actions / Python / npm 每周检查一次
+# 安全补丁类更新建议尽快合并; 组内没有锁定的传递依赖由各自的 lockfile 管控
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+    labels:
+      - "dependencies"
+    # miservice-fork 已用 ~=2.9.3 约束, 升级 PR 人工确认后再合
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+    labels:
+      - "dependencies"

@@ -237,7 +237,7 @@
     </n-card>
 
     <n-space v-if="tab !== 'about' && tab !== 'loginlog' && tab !== 'other'">
-      <n-button type="primary" :loading="saving" @click="save">保存并应用 (热重启服务)</n-button>
+      <n-button type="primary" :loading="saving" :disabled="loadFailed" @click="save">保存并应用 (热重启服务)</n-button>
     </n-space>
   </n-space>
 </template>
@@ -260,6 +260,8 @@ const app = useAppStore()
 
 const message = useMessage()
 const loading = ref(false)
+// 设置加载失败时禁用保存, 防止把表单默认值全量覆盖到服务端
+const loadFailed = ref(false)
 const saving = ref(false)
 
 // 移动端适配: 窄屏时标签改为上方排列, 避免 160px 左标签挤压输入区
@@ -383,6 +385,7 @@ const info = reactive({
 
 async function load() {
   loading.value = true
+  loadFailed.value = false
   try {
     const s = await fetchSettings()
     form.auto_play_on_set_uri = s.auto_play_on_set_uri
@@ -403,6 +406,11 @@ async function load() {
     info.engine_version = s.engine_version
     info.hostname = s.hostname
     info.renderers_count = s.renderers_count
+  } catch (e: any) {
+    // 加载失败必须拦住保存: 表单停留在硬编码默认值上, 此时提交会把
+    // 真实端口/通知配置等全部覆盖成默认值 (丢配置陷阱)
+    loadFailed.value = true
+    message.error(e.response?.data?.detail || '加载设置失败, 请刷新重试; 已禁用保存以防默认值覆盖现有配置')
   } finally {
     loading.value = false
   }
