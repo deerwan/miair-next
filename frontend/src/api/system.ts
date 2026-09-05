@@ -57,8 +57,18 @@ export interface SystemStatus {
   dlna_port: number
   has_account: boolean
   logged_in: boolean
+  /** serviceToken 剩余有效期 (小时), 负数=已过期; null=未知 */
+  service_token_remaining_hours?: number | null
   uptime_seconds: number
   memory_mb: number | null
+  /** 内存口径: cgroup=容器(与 docker stats 一致) / pss / rss / peak */
+  memory_source?: 'cgroup' | 'pss' | 'rss' | 'peak' | 'unknown'
+  /** 进程 CPU 占用率 (%), 轮询窗口均值; 首次调用无基线为 null */
+  cpu_percent?: number | null
+  /** 数据目录所在文件系统剩余空间 (GB) */
+  disk_free_gb?: number | null
+  python_version?: string
+  arch?: string
 }
 
 export async function fetchStatus(): Promise<SystemStatus> {

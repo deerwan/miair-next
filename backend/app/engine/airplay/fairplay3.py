@@ -21,7 +21,17 @@ class Fairplay3():
     def decryptAESKey(self, message3: bytes, cipherText: bytes):
         assert len(cipherText) == 72
         assert len(message3) == 164
+        # 静默解密过程的调试输出。必须 try/finally 恢复 stdout:
+        # 此函数会在 RTSP 会话内被调用, 若中途抛异常而 stdout 永久指向
+        # devnull, 整个进程的 print 全部失效且 fd 泄漏 (移植自上游的
+        # airplay2-receiver, 上游同样存在此问题)。
         sys.stdout = open(os.devnull, 'w')
+        try:
+            return self._decrypt_aes_key_inner(message3, cipherText)
+        finally:
+            sys.stdout = sys.__stdout__
+
+    def _decrypt_aes_key_inner(self, message3: bytes, cipherText: bytes):
         """
         Input: message3. This is the FPLY data block, 164 bytes.
         cipherText: the encrypted fpaes key
@@ -63,7 +73,6 @@ class Fairplay3():
         keyOut = XOR_with_Z_Key(keyOut, 1)
         print(bytearray(keyOut).hex())
         print('All done.')
-        sys.stdout = sys.__stdout__
         return bytes(keyOut)
 
     def decryptMessage(self, messageIn: bytes):

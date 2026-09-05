@@ -44,6 +44,20 @@ class PacketData:
     payload: bytes    # 加密音频数据或静音帧
 
 
+def loss_gate_action(elapsed: float, grace: float, give_up: float) -> str:
+    """丢包恢复三道闸门决策 (shairport-sync player.c 思路)
+
+    - elapsed < grace: "wait"   首见宽限期内只等 (乱序/迟到包大概率到达)
+    - elapsed > give_up: "skip" 等待超时, 填静音跳过缺口
+    - 其余: "retry"             限频重发重传请求
+    """
+    if elapsed < grace:
+        return "wait"
+    if elapsed > give_up:
+        return "skip"
+    return "retry"
+
+
 class JitterBuffer:
     """RTP 包环形缓冲区
 
@@ -1534,9 +1548,15 @@ class AirPlayServer:
 
             # 重传状态: seq -> (首次请求 perf_counter 时间, 重试次数)
             _retransmit_state: dict[int, tuple[float, int]] = {}
-            _RETRANSMIT_BASE_INTERVAL = 0.040  # 40ms
-            _RETRANSMIT_MAX_INTERVAL = 1.000
-            _RETRANSMIT_GIVE_UP_TIME = 2.0  # 2秒后放弃
+            # ---- 丢包恢复: shairport-sync 式三道闸门 (player.c 的
+            #      too_early / too_soon_after_last_request / too_late 思路) ----
+            # 首见宽限: 缺口刚出现时不插静音——Wi-Fi 上几十毫秒的乱序/迟到
+            # 占绝大多数, 立刻补静音会把本来无感的迟到变成可听见的卡顿
+            # (上游 airplay2-receiver 更是全程不插静音, 空档交给输出缓冲吸收)
+            _GAP_GRACE_TIME = 0.050        # 闸门1: 首见 50ms 内只等不动
+            _RETRANSMIT_BASE_INTERVAL = 0.040
+            _RETRANSMIT_MAX_INTERVAL = 0.320  # 重传请求限频上限 (原 1s 太久)
+            _RETRANSMIT_GIVE_UP_TIME = 0.6    # 闸门3: 0.6s 仍缺才填静音跳坑
 
             while self._running:
                 try:
@@ -1591,55 +1611,61 @@ class AirPlayServer:
                         for d_seq, _, _ in drained:
                             _retransmit_state.pop(d_seq, None)
 
-                    # 丢包检测 + 指数退避重传
+                    # 丢包恢复: 宽限 → 限频重传 → 放弃填坑 (三道闸门)
                     if len(jb) > 8:
                         missing_seqs = jb.gap_missing(next_seq)
                         now_mono = time.perf_counter()
 
                         for missing_seq in missing_seqs:
-                            if missing_seq in _retransmit_state:
-                                first_time, retry_count = _retransmit_state[missing_seq]
-                                # 放弃条件
-                                if now_mono - first_time > _RETRANSMIT_GIVE_UP_TIME:
-                                    _retransmit_state.pop(missing_seq, None)
-                                    next_avail = jb.next_available_after(missing_seq)
-                                    if next_avail is not None:
-                                        gap = (next_avail - missing_seq) & 0xFFFF
-                                        gap = min(gap, 64)
-                                        for _ in range(gap):
-                                            try:
-                                                decode_queue.put_nowait(
-                                                    PacketData(-1, 0, _silence_frame))
-                                            except queue.Full:
-                                                pass
-                                        next_seq = next_avail
-                                        # 清理跳过范围的重传状态
-                                        for s in range(missing_seq, next_avail):
-                                            _retransmit_state.pop(s & 0xFFFF, None)
-                                    continue
-
-                                # 指数退避重试
-                                backoff = min(
-                                    _RETRANSMIT_BASE_INTERVAL * (2 ** retry_count),
-                                    _RETRANSMIT_MAX_INTERVAL
-                                )
-                                if now_mono - first_time >= backoff * (retry_count + 1):
-                                    self._request_retransmit(missing_seq, 1)
-                                    _retransmit_state[missing_seq] = (first_time, retry_count + 1)
-                                    try:
-                                        decode_queue.put_nowait(
-                                            PacketData(-1, 0, _silence_frame))
-                                    except queue.Full:
-                                        pass
-                            else:
-                                # 首次检测: 请求重传
+                            if missing_seq not in _retransmit_state:
+                                # 首次检测: 立即请求重传, 但不插静音——
+                                # 宽限期内迟到的包到达后 drain 正常消费
+                                _retransmit_state[missing_seq] = (now_mono, 0)
                                 self._request_retransmit(missing_seq, 1)
-                                _retransmit_state[missing_seq] = (now_mono, 1)
-                                try:
-                                    decode_queue.put_nowait(
-                                        PacketData(-1, 0, _silence_frame))
-                                except queue.Full:
-                                    pass
+                                continue
+
+                            first_time, retry_count = _retransmit_state[missing_seq]
+                            elapsed = now_mono - first_time
+
+                            gate = loss_gate_action(
+                                elapsed, _GAP_GRACE_TIME, _RETRANSMIT_GIVE_UP_TIME
+                            )
+
+                            # 闸门1: 宽限期内只等——不补静音、不重发请求
+                            if gate == "wait":
+                                continue
+
+                            # 闸门3: 放弃——填静音跳过缺口继续播
+                            if gate == "skip":
+                                _retransmit_state.pop(missing_seq, None)
+                                next_avail = jb.next_available_after(missing_seq)
+                                if next_avail is not None:
+                                    gap = (next_avail - missing_seq) & 0xFFFF
+                                    gap = min(gap, 64)
+                                    log.info(
+                                        f"丢包放弃重传: 缺 {gap} 帧 (~{gap * 8}ms), "
+                                        f"填静音跳过 (seq={missing_seq})"
+                                    )
+                                    for _ in range(gap):
+                                        try:
+                                            decode_queue.put_nowait(
+                                                PacketData(-1, 0, _silence_frame))
+                                        except queue.Full:
+                                            pass
+                                    next_seq = next_avail
+                                    # 清理跳过范围的重传状态
+                                    for s in range(missing_seq, next_avail):
+                                        _retransmit_state.pop(s & 0xFFFF, None)
+                                continue
+
+                            # 闸门2: 限频重发请求 (指数退避), 不再叠加静音帧
+                            backoff = min(
+                                _RETRANSMIT_BASE_INTERVAL * (2 ** retry_count),
+                                _RETRANSMIT_MAX_INTERVAL
+                            )
+                            if elapsed >= backoff * (retry_count + 1):
+                                self._request_retransmit(missing_seq, 1)
+                                _retransmit_state[missing_seq] = (first_time, retry_count + 1)
 
                 except socket.timeout:
                     continue

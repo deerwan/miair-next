@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import platform
 import resource
 import sys
 import time
@@ -32,23 +33,102 @@ _UPDATE_CACHE_TTL = 600
 _update_cache: tuple[dict, float] | None = None
 
 
-def _memory_mb() -> float | None:
-    """当前进程内存占用 (MB), 仅用标准库不引入重依赖。
+def _memory_mb() -> tuple[float | None, str]:
+    """当前内存占用 (MB) 与口径标注, 仅用标准库不引入重依赖。
 
-    Linux 优先读 /proc/self/status 的 VmRSS (实时值);
-    其它平台退回 resource.ru_maxrss (峰值, Linux 单位 KB / macOS 单位字节)。
+    业界标准的分层回退 (口径与所处环境的 OOM 威胁模型对齐):
+    1. 容器 (cgroup v2/v1): memory.current —— 与 docker stats / OOM killer
+       同一口径, 给容器设了内存限额时这个数字才有意义;
+    2. Linux 裸机: PSS (/proc/self/smaps_rollup) —— 共享库按比例分摊,
+       比 VmRSS 更接近真实物理占用;
+    3. 其它平台 (macOS 开发): resource.ru_maxrss (峰值口径, 尽力而为)。
     """
+    # 1) cgroup v2 (Docker 默认) / v1
+    for path in (
+        "/sys/fs/cgroup/memory.current",                # cgroup v2
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",  # cgroup v1
+    ):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return round(int(f.read().strip()) / 1024 / 1024, 1), "cgroup"
+        except (OSError, ValueError):
+            continue
+
+    # 2) Linux 裸机: PSS (smaps_rollup 自内核 4.14 起可用)
+    try:
+        with open("/proc/self/smaps_rollup", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    return round(int(line.split()[1]) / 1024, 1), "pss"
+    except OSError:
+        pass
+
+    # 3) 回退: Linux VmRSS, 再退 macOS ru_maxrss (峰值)
     try:
         with open("/proc/self/status", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024, 1)
+                    return round(int(line.split()[1]) / 1024, 1), "rss"
     except OSError:
         pass
     try:
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
-        return round(rss / divisor, 1)
+        return round(rss / divisor, 1), "peak"
+    except Exception:
+        return None, "unknown"
+
+
+# 进程 CPU 采样基线: (墙钟时间, 累计 CPU 秒), 用于相邻两次 /status 间算百分比
+_last_cpu_sample: tuple[float, float] | None = None
+
+
+def _read_process_cpu_seconds() -> float | None:
+    """进程累计 CPU 秒: Linux 读 /proc/self/stat, 其它平台退回 getrusage"""
+    try:
+        with open("/proc/self/stat", encoding="utf-8") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        # utime=第11字段, stime=第12字段 (index 11/12 after state), 单位: 时钟滴答
+        clock_ticks = os.sysconf("SC_CLK_TCK")
+        utime, stime = int(fields[11]), int(fields[12])
+        return (utime + stime) / clock_ticks
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        return ru.ru_utime + ru.ru_stime
+    except Exception:
+        return None
+
+
+def _cpu_percent() -> float | None:
+    """进程 CPU 占用率 (%): 相邻两次调用的 CPU 时间差 / 墙钟差。
+
+    前端每 30s 轮询一次, 返回的是该窗口的平均占用——与任务管理器的
+    刷新语义一致。仅统计本进程 (容器内即容器主进程), 不含宿主机整体。
+    """
+    global _last_cpu_sample
+    cpu = _read_process_cpu_seconds()
+    if cpu is None:
+        return None
+    now = time.time()
+    if _last_cpu_sample is None:
+        _last_cpu_sample = (now, cpu)
+        return None
+    prev_t, prev_cpu = _last_cpu_sample
+    _last_cpu_sample = (now, cpu)
+    wall = now - prev_t
+    if wall <= 0:
+        return None
+    return round(min((cpu - prev_cpu) / wall * 100, 100.0), 1)
+
+
+def _disk_free_gb(config) -> float | None:
+    """数据目录所在文件系统的剩余空间 (GB): 日志/数据库/转码临时文件都在这"""
+    try:
+        import shutil
+
+        return round(shutil.disk_usage(config.conf_path).free / 1024**3, 1)
     except Exception:
         return None
 
@@ -72,6 +152,7 @@ async def system_status(
         if config.token_expires_at > 0
         else None
     )
+    memory_mb, memory_source = _memory_mb()
     return {
         "version": __version__,
         "dlna_running": orch.dlna_running,
@@ -86,7 +167,16 @@ async def system_status(
         "has_password_fallback": bool(config.account and config.password),
         "token_refresh_running": bool(auth._refresh_task and not auth._refresh_task.done()),
         "uptime_seconds": int(time.time() - _START_TIME),
-        "memory_mb": _memory_mb(),
+        "memory_mb": memory_mb,
+        # 内存口径: cgroup(容器, 与 docker stats 一致) / pss / rss / peak
+        "memory_source": memory_source,
+        # 进程 CPU 占用率 (%): 两次轮询窗口的平均值, 首次调用无基线为 None
+        "cpu_percent": _cpu_percent(),
+        # 数据目录所在文件系统剩余空间 (GB)
+        "disk_free_gb": _disk_free_gb(config),
+        # 运行环境 (排障用): python 版本 + CPU 架构
+        "python_version": sys.version.split()[0],
+        "arch": platform.machine(),
     }
 
 

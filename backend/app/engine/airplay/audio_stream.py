@@ -117,26 +117,33 @@ class AudioStreamServer:
             pass
         log.info("音频流: 停止接收 PCM 数据")
 
+    # 队列溢出日志节流: 溢出本不应发生 (丢包闸门已前移), 一旦发生要可见但不刷屏
+    _DROP_LOG_INTERVAL = 10.0
+
     def write_pcm(self, data: bytes):
-        """写入 PCM 音频数据 — 非阻塞，队列满时批量丢弃旧数据腾出空间"""
+        """写入 PCM 音频数据 — 非阻塞，队列满时只丢最旧的最少数量"""
         if not self._active:
             return
         try:
             self._audio_queue.put_nowait(data)
         except queue.Full:
-            # 批量丢弃旧数据，一次性腾出足够空间，避免反复 put/get 开销
+            # 只丢到能放下本块为止 (通常 1-2 块 ≈ 10-20ms), 原实现一次丢 25%
+            # (~200ms) 会造成明显的整段跳顿
             dropped = 0
-            target = _QUEUE_MAXSIZE // 4  # 丢弃 25% 腾出充裕空间
             try:
-                for _ in range(target):
+                while True:
                     self._audio_queue.get_nowait()
                     dropped += 1
+                    self._audio_queue.put_nowait(data)
+                    break
             except queue.Empty:
-                pass
-            try:
-                self._audio_queue.put_nowait(data)
+                return
             except queue.Full:
                 pass
+            now = time.monotonic()
+            if now - getattr(self, "_last_drop_log", 0.0) > self._DROP_LOG_INTERVAL:
+                self._last_drop_log = now
+                log.warning(f"音频队列溢出: 丢弃最旧 {dropped} 块 (~{dropped * 8}ms)")
 
     # ============================================================
     # WAV 模式 — 直接输出 PCM，零编码延迟
@@ -268,7 +275,7 @@ class AudioStreamServer:
                     await response.write(b"".join(chunks))
         except (ConnectionResetError, BrokenPipeError):
             log.info("AirPlay: 音箱断开 WAV 音频流连接")
-        except Exception as e:
+        except Exception:
             pass
         finally:
             conn_abort.set()  # 只中断本连接的 reader，不影响后续重连
@@ -405,7 +412,7 @@ class AudioStreamServer:
                         continue
                     except (BrokenPipeError, OSError):
                         break
-            except Exception as e:
+            except Exception:
                 pass
             finally:
                 try:
@@ -424,7 +431,7 @@ class AudioStreamServer:
                 await response.write(audio_data)
         except (ConnectionResetError, BrokenPipeError):
             log.info("AirPlay: 音箱断开 MP3 音频流连接")
-        except Exception as e:
+        except Exception:
             pass
         finally:
             conn_abort.set()
