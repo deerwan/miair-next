@@ -1045,6 +1045,12 @@ class AirPlayServer:
                     log.error(f"无法加载 FairPlay 解密模块 (ap2): {e}")
                     # 如果缺少 ap2，尝试使用 fp_decrypt 中的逻辑或其他 fallback
                     self._session_key = None
+                except Exception as e:
+                    # keymsg 缺失/畸形 (fp-setup 未先于 ANNOUNCE 完成或长度不符)
+                    # 时解密会抛 TypeError/ValueError, 不捕获会击穿整个 RTSP
+                    # 会话 (兜底 except 只能断连, ANNOUNCE 无响应导致投屏失败)
+                    log.error(f"FairPlay 密钥解密失败 (fp-setup 缺失或数据异常?): {e}")
+                    self._session_key = None
             
             self._session_iv = aes_iv
             self._session_iv16 = aes_iv[:16] if aes_iv else None

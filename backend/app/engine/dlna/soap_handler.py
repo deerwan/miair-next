@@ -14,6 +14,7 @@ from app.engine.const import (
 )
 from app.engine.dlna.renderer import DLNARenderer
 from app.engine.dlna.templates import soap_fault, soap_response
+from app.engine.dlna.xmlsafe import safe_fromstring
 
 log = logging.getLogger("miair")
 
@@ -46,7 +47,7 @@ def parse_soap_body(body: str) -> dict[str, str]:
     """
     params = {}
     try:
-        root = ET.fromstring(body)
+        root = safe_fromstring(body)
         # 找到 Body 下的 action 元素
         body_elem = root.find(f".//{{{SOAP_NS}}}Body")
         if body_elem is None:

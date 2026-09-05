@@ -4,11 +4,36 @@ import asyncio
 import logging
 import time
 import uuid
+from urllib.parse import urlparse
 
 import aiohttp
 from xml.sax.saxutils import escape
 
 log = logging.getLogger("miair")
+
+# 订阅表上限: 无鉴权端点, 防反复 SUBSCRIBE 堆积 task/内存
+MAX_SUBSCRIPTIONS = 64
+# 单条 CALLBACK URL 长度上限
+_CALLBACK_MAX_LEN = 2048
+# TIMEOUT 封顶/保底: Second-99999999999 这类"永生"订阅一律收敛
+_TIMEOUT_MIN = 60
+_TIMEOUT_MAX = 3600
+
+
+def clamp_timeout(seconds: int) -> int:
+    """把订阅时长收敛到 [_TIMEOUT_MIN, _TIMEOUT_MAX] 区间"""
+    return max(_TIMEOUT_MIN, min(int(seconds), _TIMEOUT_MAX))
+
+
+def validate_callback_url(url: str) -> str | None:
+    """校验 SUBSCRIBE 的 CALLBACK: 仅接受 http(s) URL, 返回规范化值或 None"""
+    url = (url or "").strip().strip("<>").strip()
+    if not url or len(url) > _CALLBACK_MAX_LEN:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    return url
 
 
 class Subscription:
@@ -17,7 +42,7 @@ class Subscription:
     def __init__(self, sid: str, callback_url: str, timeout: int = 1800):
         self.sid = sid
         self.callback_url = callback_url
-        self.timeout = timeout
+        self.timeout = clamp_timeout(timeout)
         self.created_at = time.time()
         self.seq: int = 0
 
@@ -26,7 +51,7 @@ class Subscription:
         return (time.time() - self.created_at) > self.timeout
 
     def renew(self, timeout: int = 1800):
-        self.timeout = timeout
+        self.timeout = clamp_timeout(timeout)
         self.created_at = time.time()
 
 
@@ -56,11 +81,20 @@ class EventManager:
             await self._session.close()
             self._session = None
 
-    def subscribe(self, callback_url: str, timeout: int = 1800) -> str:
-        """创建新订阅"""
+    def subscribe(self, callback_url: str, timeout: int = 1800) -> str | None:
+        """创建新订阅; CALLBACK 非法或订阅表满时返回 None (调用方回 400)"""
+        url = validate_callback_url(callback_url)
+        if url is None:
+            log.warning(f"拒绝非法 CALLBACK 订阅: {callback_url[:80]}")
+            return None
+        # 先清一次已过期订阅再判容量, 避免恰好满表时误拒
+        self._purge_expired()
+        if len(self._subscriptions) >= MAX_SUBSCRIPTIONS:
+            log.warning(f"订阅数已达上限 {MAX_SUBSCRIPTIONS}, 拒绝新订阅")
+            return None
         sid = f"uuid:{uuid.uuid4()}"
-        self._subscriptions[sid] = Subscription(sid, callback_url, timeout)
-        log.info(f"新订阅: SID={sid} callback={callback_url} timeout={timeout}s")
+        self._subscriptions[sid] = Subscription(sid, url, timeout)
+        log.info(f"新订阅: SID={sid} callback={url} timeout={timeout}s")
         return sid
 
     def renew(self, sid: str, timeout: int = 1800) -> bool:
@@ -78,23 +112,28 @@ class EventManager:
             return True
         return False
 
+    def _purge_expired(self):
+        """清理已过期的订阅 (订阅与周期清理共用)"""
+        expired = [
+            sid for sid, sub in self._subscriptions.items() if sub.expired
+        ]
+        for sid in expired:
+            del self._subscriptions[sid]
+
     def has_subscribers(self) -> bool:
         """检查是否有未过期的订阅者"""
         return any(not sub.expired for sub in self._subscriptions.values())
 
     async def notify_all(self, event_xml: str):
         """向所有活跃订阅者发送事件通知 (fire-and-forget，不等待慢订阅者)"""
-        expired_sids = []
         for sid, sub in self._subscriptions.items():
             if sub.expired:
-                expired_sids.append(sid)
                 continue
             # fire-and-forget: 创建任务但不等待，避免慢订阅者阻塞事件通知
             task = asyncio.create_task(self._send_notify(sub, event_xml))
             task.add_done_callback(lambda t: None)  # 阻止未捕获异常警告
 
-        for sid in expired_sids:
-            del self._subscriptions[sid]
+        self._purge_expired()
 
     async def _send_notify(self, sub: Subscription, event_xml: str):
         """发送 NOTIFY 到订阅者 (使用持久 session)"""
@@ -127,11 +166,7 @@ class EventManager:
         try:
             while True:
                 await asyncio.sleep(60)  # 从 300 秒缩短到 60 秒，更及时释放资源
-                expired = [
-                    sid for sid, sub in self._subscriptions.items() if sub.expired
-                ]
-                for sid in expired:
-                    del self._subscriptions[sid]
+                self._purge_expired()
                 # 没有订阅者时关闭空闲 session
                 if not self._subscriptions:
                     await self._close_idle_session()

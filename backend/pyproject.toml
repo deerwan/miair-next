@@ -1,6 +1,6 @@
 [project]
 name = "miair-next"
-version = "0.5.9"
+version = "0.5.10"
 description = "Make Xiaomi AI speakers act as DLNA / AirPlay renderers, with a modern admin panel"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"

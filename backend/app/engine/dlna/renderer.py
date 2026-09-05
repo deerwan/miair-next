@@ -19,6 +19,7 @@ from app.engine.const import (
 )
 from app.engine.speaker import SpeakerController
 from app.engine.dlna.cover import resolve_default_cover_url
+from app.engine.dlna.xmlsafe import safe_fromstring
 
 log = logging.getLogger("miair")
 
@@ -145,7 +146,7 @@ class DLNARenderer:
         if not metadata:
             return "", ""
         try:
-            root = ET.fromstring(metadata)
+            root = safe_fromstring(metadata)
         except ET.ParseError:
             return "", ""
         didl_ns = "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
@@ -201,7 +202,7 @@ class DLNARenderer:
     def _build_didl_with_cover(metadata: str, cover_url: str) -> str:
         """在接收到的 DIDL 中注入默认 albumArtURI；若无有效 DIDL 则构造最小可用 DIDL。"""
         try:
-            root = ET.fromstring(metadata)
+            root = safe_fromstring(metadata)
         except ET.ParseError:
             root = None
 
@@ -762,7 +763,7 @@ class DLNARenderer:
                 return DLNARenderer._parse_time(duration_str)
 
             # 备选: 尝试解析 XML
-            root = ET.fromstring(metadata)
+            root = safe_fromstring(metadata)
             for elem in root.iter():
                 duration = elem.get("duration")
                 if duration:

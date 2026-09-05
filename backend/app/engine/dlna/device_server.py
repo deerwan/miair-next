@@ -18,7 +18,7 @@ from app.engine.const import (
     TRANSPORT_STATE_STOPPED,
     TRANSPORT_STATE_TRANSITIONING,
 )
-from app.engine.dlna.eventing import EventManager, build_last_change_event
+from app.engine.dlna.eventing import EventManager, build_last_change_event, clamp_timeout
 from app.engine.dlna.media_buffer import MediaBuffer
 from app.engine.dlna.cover import (
     default_cover_asset_path,
@@ -1161,11 +1161,14 @@ class DeviceServer:
         if not callback:
             return web.Response(status=400)
 
-        # 提取 URL (格式: <http://...>)
+        # 提取 URL (格式: <http://...>); CALLBACK 校验与订阅上限由
+        # EventManager.subscribe 负责, 拒绝时回 400
         callback_url = callback.strip("<>")
         timeout = self._parse_timeout(request.headers.get("TIMEOUT", ""))
 
         sid = event_manager.subscribe(callback_url, timeout)
+        if sid is None:
+            return web.Response(status=400)
 
         # 发送初始事件 (参照 MaCast: 在后台发送完整状态，不阻塞 SUBSCRIBE 响应)
         renderer = self.renderers.get(udn)
@@ -1218,10 +1221,10 @@ class DeviceServer:
 
     @staticmethod
     def _parse_timeout(timeout_header: str) -> int:
-        """解析 TIMEOUT header (e.g., 'Second-1800')"""
+        """解析 TIMEOUT header (e.g., 'Second-1800'), 收敛到合理区间"""
         if timeout_header.startswith("Second-"):
             try:
-                return int(timeout_header[7:])
+                return clamp_timeout(int(timeout_header[7:]))
             except ValueError:
                 pass
         return 1800
