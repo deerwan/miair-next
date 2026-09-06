@@ -14,7 +14,7 @@ MiNAService / MiIOService) 原样继承, 对 AuthManager 完全 drop-in。
 3. 登录失败会把 account.token 置 None 并删除 .mi.token 文件, 让仍然
    有效的缓存 serviceToken 陪葬。
 
-本移植对齐 miot 插件的行为:
+登录协议与成熟的小米登录实现保持一致:
 - 续期只走 GET serviceLogin (passToken 换发), 账号密码未配置时**绝不**
   发 serviceLoginAuth2;
 - User-Agent 固定为米家 App 形态, deviceId 为持久化的 32 位 hex
@@ -45,7 +45,7 @@ ACCOUNT_BASE_URL = "https://account.xiaomi.com"
 USER_AGENT_TEMPLATE = (
     "Android-7.1.1-1.0.0-ONEPLUS A3010-136-%s APP/xiaomi.smarthome APPV/62830"
 )
-# serviceLogin / serviceLoginAuth2 携带的 SDK 版本 cookie (与 miot 插件一致)
+# serviceLogin / serviceLoginAuth2 携带的 SDK 版本 cookie
 SDK_VERSION = "3.8.6"
 
 # 合法 deviceId: 32 位小写 hex (secrets.token_hex(16) 的形态)
@@ -53,7 +53,7 @@ _DEVICE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def new_device_id() -> str:
-    """生成 32 位 hex 设备标识 (与 miot 插件 generateDeviceId 一致)"""
+    """生成 32 位 hex 设备标识 (与米家 App 设备标识同形态)"""
     return secrets.token_hex(16)
 
 
@@ -82,7 +82,7 @@ def _get_str(obj: dict, key: str, default: str = "") -> str:
 
 
 def _get_code(obj: dict) -> int:
-    """读取响应 code, 缺失/异常时按 0 处理 (与 miot 插件 Number(code||0) 对齐)"""
+    """读取响应 code, 缺失/异常时按 0 处理 (与小米账号 API 对齐)"""
     try:
         return int(obj.get("code", 0))
     except (TypeError, ValueError):
@@ -90,7 +90,7 @@ def _get_code(obj: dict) -> int:
 
 
 class MiAccount(_MiserviceMiAccount):
-    """miservice.MiAccount 的 drop-in 替换, 登录内核移植自 miot 插件"""
+    """miservice.MiAccount 的 drop-in 替换 (自研登录内核)"""
 
     def __init__(self, session, username, password, token_store=None):
         super().__init__(session, username, password, token_store=token_store)
@@ -188,7 +188,7 @@ class MiAccount(_MiserviceMiAccount):
             log.warning(f"MiAccount.login 异常: {e}")
             return False
 
-    # ---- 内部步骤 (对应 auth.ts 的 exchangeServiceToken / loginStep2 / loginStep3) ----
+    # ---- 内部步骤 (serviceLogin 换发 / 密码认证 / STS 换取 serviceToken) ----
 
     async def _service_login(self, sid) -> dict:
         """GET serviceLogin?sid={sid}&_json=true, 携带 deviceId/sdkVersion/passToken"""
@@ -231,7 +231,7 @@ class MiAccount(_MiserviceMiAccount):
         return True
 
     async def _fetch_service_token(self, location: str, nonce, ssecurity: str) -> str:
-        """访问 STS location 跟随重定向, 取回 serviceToken (auth.ts loginStep3)
+        """访问 STS location 跟随重定向, 取回 serviceToken
 
         clientSign = base64(sha1("nonce={nonce}&{ssecurity}"))
         """
@@ -245,8 +245,7 @@ class MiAccount(_MiserviceMiAccount):
         async with self.session.get(url) as r:
             service_token = self._cookie_value(r.cookies, "serviceToken")
             if not service_token:
-                # 重定向链中 serviceToken 可能落在中间某一跳 (对齐 miot 插件
-                # 「先取当前响应、再查 CookieJar」的取值顺序)
+                # 重定向链中 serviceToken 可能落在中间某一跳, 先查当前响应再查 jar
                 jar_cookies = self.session.cookie_jar.filter_cookies(r.url)
                 service_token = self._cookie_value(jar_cookies, "serviceToken")
             if not service_token:

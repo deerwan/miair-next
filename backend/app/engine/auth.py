@@ -121,9 +121,8 @@ class AuthManager:
             # 小米返回 code 70016 "登录验证失败"。
             #
             # 因此这里把 cookie 中的 userId/passToken/deviceId 预写入 .mi.token 文件,
-            # 让 MiAccount 能正常加载, 并交由 login() (登录内核移植自 miot 插件,
-            # 见 app/engine/mi_account.py) 用 passToken 自动换发 serviceToken 并
-            # save_token() 回盘 (完整自愈链路)。
+            # 让 MiAccount 能正常加载, 并交由 login() (app/engine/mi_account.py)
+            # 用 passToken 自动换发 serviceToken 并 save_token() 回盘 (完整自愈链路)。
             token_home = token_store
             try:
                 os.makedirs(os.path.dirname(token_home), exist_ok=True)

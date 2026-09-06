@@ -47,12 +47,6 @@
       <n-gi span="4 s:2 m:1">
         <n-card><n-statistic label="磁盘剩余" :value="diskText" /></n-card>
       </n-gi>
-      <n-gi span="4 s:2 m:1">
-        <n-card><n-statistic label="小米凭证" :value="tokenText" /></n-card>
-      </n-gi>
-      <n-gi span="4 s:2 m:1">
-        <n-card><n-statistic label="运行环境" :value="runtimeText" /></n-card>
-      </n-gi>
     </n-grid>
 
     <n-card title="音箱实时状态">
@@ -146,20 +140,6 @@ const cpuSparkPoints = computed(() => {
 const diskText = computed(() => {
   const d = sysStatus.value?.disk_free_gb
   return d == null ? '-' : `${d} GB`
-})
-
-const tokenText = computed(() => {
-  const h = sysStatus.value?.service_token_remaining_hours
-  if (h == null) return '未知'
-  if (h < 0) return '已过期'
-  if (h < 1) return `${Math.max(0, Math.round(h * 60))} 分钟`
-  return `${h} 小时`
-})
-
-const runtimeText = computed(() => {
-  const s = sysStatus.value
-  if (!s?.python_version) return '-'
-  return `py${s.python_version.split('.').slice(0, 2).join('.')}`
 })
 
 async function loadSysStatus() {

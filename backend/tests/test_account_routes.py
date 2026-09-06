@@ -94,3 +94,58 @@ def test_delete_account_clears_credentials(tmp_path):
     orch.restart_dlna_services.assert_called_once()
     # token 文件被删除
     assert not os.path.exists(str(token_file))
+
+
+def test_qr_poll_confirmed_persists_full_credentials(client, monkeypatch, tmp_path):
+    """回归 (2026-09-06 事故): 扫码落盘必须整串解析 cookie, passToken 不能丢成空串
+
+    parse_qs(cookie.replace(";", "&")) 会把分号后的键名解析成 " passToken"
+    (带前导空格), 落盘 passToken 为空 → 重启登录永远失败 → 触发「恢复→重启」
+    死循环。cookie 键值必须按 ";" 切分并去空格解析。
+    """
+    import json as _json
+    from pathlib import Path
+
+    from app.api.v1 import account as account_module
+
+    c, orch, config = client
+    token_path = tmp_path / ".mi.token"
+    config.mi_token_home = str(token_path)
+
+    confirmed = {
+        "state": "confirmed",
+        "message": "登录成功",
+        "cookie": "userId=1992446; passToken=REAL_TOKEN_ABC",
+        "user_id": "1992446",
+        "token_info": {
+            "user_id": "1992446",
+            "device_id": "a" * 32,
+            "services": {
+                "micoapi": {"service_token": "ST-1", "ssecurity": "SEC-1", "expires_at": 0}
+            },
+        },
+    }
+    monkeypatch.setattr(
+        account_module._qr_manager, "poll", AsyncMock(return_value=confirmed)
+    )
+
+    body = c.get("/api/v1/account/qrcode/poll", params={"session_id": "s1"}).json()
+
+    assert body["success"] is True
+    assert body["state"] == "confirmed"
+    # config.cookie 携带真实 passToken (而非 "userId=xxx; passToken=")
+    assert config.cookie == "userId=1992446; passToken=REAL_TOKEN_ABC"
+    # .mi.token 同样落盘完整凭据 + micoapi 缓存
+    saved = _json.loads(Path(token_path).read_text())
+    assert saved["userId"] == "1992446"
+    assert saved["passToken"] == "REAL_TOKEN_ABC"
+    assert saved["deviceId"] == "a" * 32
+    assert saved["micoapi"] == ["SEC-1", "ST-1"]
+
+
+def test_account_status_parses_cookie_with_space_separator(client):
+    """user_id 解析对 "; passToken=xxx" 形态同样健壮"""
+    c, orch, config = client
+    # fixture 里的 cookie 即 "userId=...; passToken=..." (分号后带空格)
+    body = c.get("/api/v1/account/status").json()
+    assert body["user_id"] == "test_user_001"

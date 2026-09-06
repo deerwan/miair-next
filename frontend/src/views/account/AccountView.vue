@@ -1,23 +1,16 @@
 <template>
   <n-space vertical :size="16">
-    <n-card title="当前账号状态">
+    <n-card v-if="status.logged_in" title="当前账号状态">
       <n-space align="center" justify="space-between" :wrap="false">
-        <n-space align="center" :size="14">
-          <div>
-            <n-space align="center" :size="8">
-              <n-text strong style="font-size: 20px">{{ status.user_id || '未登录' }}</n-text>
-              <n-tag :type="statusTagType" round size="small">{{ statusLabel }}</n-tag>
-            </n-space>
-            <div style="margin-top: 4px">
-              <n-text depth="3" style="font-size: 13px">{{ statusSubtitle }}</n-text>
-            </div>
-            <n-space :size="20" style="margin-top: 6px">
-              <n-text depth="3" style="font-size: 12px">serviceToken 剩余: {{ remainingText }}</n-text>
-              <n-text depth="3" style="font-size: 12px">账密兜底: {{ status.has_password_fallback ? '有' : '无' }}</n-text>
-              <n-text depth="3" style="font-size: 12px">定时续期: {{ status.token_refresh_running ? '运行中' : '已停止' }}</n-text>
-            </n-space>
+        <div>
+          <n-space align="center" :size="8">
+            <n-text strong style="font-size: 20px">{{ status.user_id }}</n-text>
+            <n-tag :type="statusTagType" round size="small">{{ statusLabel }}</n-tag>
+          </n-space>
+          <div style="margin-top: 4px">
+            <n-text depth="3" style="font-size: 13px">{{ statusSubtitle }}</n-text>
           </div>
-        </n-space>
+        </div>
         <n-space>
           <n-button circle :loading="refreshing" :disabled="!status.has_account" title="刷新重新登录" @click="refreshAccount">
             <template #icon>
@@ -70,24 +63,12 @@
               <n-spin v-if="qr.state === 'waiting'" :size="14" />
               <n-text :depth="qr.state === 'waiting' ? 3 : 1">{{ qr.statusText }}</n-text>
             </n-space>
-            <n-text depth="3" style="font-size: 12px">
-              无法扫码?
-              <a :href="qr.loginUrl" target="_blank" rel="noopener">点此在浏览器打开登录页</a>
-            </n-text>
             <n-button size="small" @click="resetQr">重新获取</n-button>
           </n-space>
         </n-tab-pane>
 
         <!-- 方式二: 账号密码 -->
         <n-tab-pane name="password" tab="账号密码">
-          <n-alert type="warning" :bordered="false" style="margin-bottom: 16px">
-            账号密码登录可能触发滑块 / 短信验证码, 若登录失败请改用扫码登录。
-          </n-alert>
-          <n-alert type="info" :bordered="false" style="margin-bottom: 16px">
-            账密同时也是「自动恢复凭证」: 小米 passToken 约 24 小时过期, 且换发
-            serviceToken 不会延长它。配置账密后, 一旦凭证过期服务会自动重新登录恢复,
-            无需再扫码。
-          </n-alert>
           <n-form label-placement="top">
             <n-form-item label="账号 (手机号 / 邮箱 / 小米 ID)">
               <n-input v-model:value="form.account" placeholder="请输入账号" />
@@ -96,22 +77,56 @@
               <n-input v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码" />
             </n-form-item>
           </n-form>
-          <n-checkbox v-model:checked="clearCookie">
+          <n-space vertical :size="10">
+            <n-space align="center" :size="10">
+              <n-button type="primary" :loading="pw.loading" @click="startPasswordLogin">
+                登录并应用
+              </n-button>
+              <n-text depth="3" style="font-size: 12px">
+                立即登录并启用; 触发验证码/短信验证时在下方完成
+              </n-text>
+            </n-space>
+
+            <!-- 图形验证码续步 -->
+            <n-space v-if="pw.state === 'need_captcha'" align="center" :size="12">
+              <img
+                v-if="pw.captchaImage"
+                :src="`data:image/png;base64,${pw.captchaImage}`"
+                alt="图形验证码"
+                style="height: 40px; border: 1px solid var(--n-border-color); border-radius: 4px"
+              />
+              <n-input
+                v-model:value="pw.captchaCode"
+                placeholder="请输入图中验证码"
+                style="width: 180px"
+                @keyup.enter="submitPwCaptcha"
+              />
+              <n-button :loading="pw.loading" @click="submitPwCaptcha">提交</n-button>
+            </n-space>
+
+            <!-- 短信/邮箱验证码续步 -->
+            <n-space v-else-if="pw.state === 'need_verify'" align="center" :size="12">
+              <n-text>验证码已发送至{{ pw.verifyType === 'email' ? '邮箱' : '手机' }}</n-text>
+              <n-input
+                v-model:value="pw.verifyCode"
+                placeholder="请输入验证码"
+                style="width: 180px"
+                @keyup.enter="submitPwVerify"
+              />
+              <n-button :loading="pw.loading" @click="submitPwVerify">提交</n-button>
+            </n-space>
+
+            <n-text v-if="pw.error" type="error">{{ pw.error }}</n-text>
+          </n-space>
+          <n-checkbox v-model:checked="clearCookie" style="margin-top: 12px">
             保存时清空已保存的 Cookie (用于强制改用账密登录)
           </n-checkbox>
-          <n-text
-            tag="p"
-            depth="3"
-            style="font-size: 12px; line-height: 1.6; margin: 4px 0 0 24px"
-          >
-            <b>正常登录无需勾选</b>：默认保留 Cookie 作首选凭证，账密仅作自动恢复兜底；仅想强制改用账密登录时才勾选。
-          </n-text>
         </n-tab-pane>
 
         <!-- 方式三: 手动 Token -->
         <n-tab-pane name="token" tab="手动 Token">
           <n-alert :show-icon="false" :bordered="false" style="margin-bottom: 16px">
-            从浏览器 Cookie 中获取 userId 和 passToken。凭据只发送给 MIoT 插件，不会显示在日志中。
+            从浏览器 Cookie 中获取 userId 和 passToken。凭据只发送给本服务，不会显示在日志中。
           </n-alert>
           <n-form label-placement="top">
             <n-form-item label="User ID">
@@ -126,6 +141,17 @@
               />
             </n-form-item>
           </n-form>
+          <n-space vertical :size="8">
+            <n-space align="center" :size="10">
+              <n-button type="primary" :loading="tokenVerifying" @click="verifyManualToken">
+                验证并应用
+              </n-button>
+              <n-text depth="3" style="font-size: 12px">
+                立即换取 serviceToken 验证有效性并启用 (填错当场报错)
+              </n-text>
+            </n-space>
+            <n-text v-if="tokenError" type="error">{{ tokenError }}</n-text>
+          </n-space>
         </n-tab-pane>
       </n-tabs>
     </n-card>
@@ -172,15 +198,20 @@ import {
   pollQRCode,
   fetchAccountStatus,
   deleteAccount,
+  passwordLogin,
+  submitLoginCaptcha,
+  submitLoginVerifyCode,
+  setManualToken,
   type QRPollState,
   type AccountStatus,
   type AccountStatusLevel,
+  type PasswordLoginResult,
 } from '@/api/account'
 
 const message = useMessage()
 const dialog = useDialog()
 
-// 当前账号状态卡 (直观展示登录账号 / 状态 / 剩余有效期 / 兜底)
+// 当前账号状态卡 (仅在已登录时展示, 简洁风格)
 const status = reactive<AccountStatus>({
   user_id: '',
   logged_in: false,
@@ -206,13 +237,10 @@ const statusLabelMap: Record<AccountStatusLevel, string> = {
 }
 const statusLabel = computed(() => statusLabelMap[status.status])
 const statusSubtitle = computed(() => {
-  if (!status.logged_in) return '未登录小米账号, 无法投送'
   if (status.status === 'expiring') return '凭证即将过期, 建议点击「刷新重新登录」'
   if (status.status === 'expired') return '凭证已过期, 请点击「刷新重新登录」'
-  return '已登录 · 凭证正常'
+  return `已登录 · User ID ${status.user_id}`
 })
-const remainingText = computed(() =>
-  status.service_token_remaining_hours == null ? '未知' : `${status.service_token_remaining_hours} 小时`)
 
 async function loadAccountStatus() {
   try {
@@ -356,6 +384,132 @@ function resetQr() {
   qr.loginUrl = ''
   qr.error = ''
   startQr()
+}
+
+// 密码登录交互会话 (登录 → 验证码/短信验证 → 成功)
+const pw = reactive({
+  sessionId: '',
+  state: 'idle' as 'idle' | 'need_captcha' | 'need_verify',
+  captchaImage: '',
+  captchaCode: '',
+  verifyType: 'phone' as 'phone' | 'email',
+  verifyCode: '',
+  loading: false,
+  error: '',
+})
+
+function resetPwSession() {
+  pw.sessionId = ''
+  pw.state = 'idle'
+  pw.captchaImage = ''
+  pw.captchaCode = ''
+  pw.verifyCode = ''
+}
+
+async function startPasswordLogin() {
+  if (!form.account || !form.password) {
+    message.warning('请输入账号和密码')
+    return
+  }
+  pw.loading = true
+  pw.error = ''
+  resetPwSession()
+  try {
+    handlePwResult(await passwordLogin(form.account, form.password))
+  } catch (e: any) {
+    pw.error = e.response?.data?.detail || '登录失败'
+  } finally {
+    pw.loading = false
+  }
+}
+
+async function submitPwCaptcha() {
+  if (!pw.captchaCode.trim()) {
+    message.warning('请输入图中验证码')
+    return
+  }
+  pw.loading = true
+  pw.error = ''
+  try {
+    handlePwResult(await submitLoginCaptcha(pw.sessionId, pw.captchaCode.trim()))
+  } catch (e: any) {
+    pw.error = e.response?.data?.detail || '验证码提交失败'
+  } finally {
+    pw.loading = false
+  }
+}
+
+async function submitPwVerify() {
+  if (!pw.verifyCode.trim()) {
+    message.warning('请输入验证码')
+    return
+  }
+  pw.loading = true
+  pw.error = ''
+  try {
+    handlePwResult(await submitLoginVerifyCode(pw.sessionId, pw.verifyCode.trim()))
+  } catch (e: any) {
+    pw.error = e.response?.data?.detail || '验证码提交失败'
+  } finally {
+    pw.loading = false
+  }
+}
+
+function handlePwResult(res: PasswordLoginResult) {
+  if (res.success && res.state === 'success') {
+    resetPwSession()
+    message.success('登录成功, 服务正在重启')
+    loadAccountStatus()
+    loadInit()
+    loadDevices()
+    return
+  }
+  if (res.success && res.state === 'need_captcha') {
+    pw.sessionId = res.session_id || ''
+    pw.state = 'need_captcha'
+    pw.captchaImage = res.captcha_image || ''
+    pw.captchaCode = ''
+    return
+  }
+  if (res.success && res.state === 'need_verify') {
+    pw.sessionId = res.session_id || ''
+    pw.state = 'need_verify'
+    pw.verifyType = res.verify_type || 'phone'
+    pw.verifyCode = ''
+    return
+  }
+  resetPwSession()
+  pw.error = res.error || '登录失败'
+}
+
+// 手动 Token 立即验证
+const tokenVerifying = ref(false)
+const tokenError = ref('')
+
+async function verifyManualToken() {
+  const u = form.userId.trim()
+  const p = form.passToken.trim()
+  if (!u || !p) {
+    message.warning('请填写 User ID 和 Pass Token')
+    return
+  }
+  tokenVerifying.value = true
+  tokenError.value = ''
+  try {
+    const res = await setManualToken(u, p)
+    if (res.success) {
+      message.success('令牌验证成功, 服务正在重启')
+      await loadAccountStatus()
+      await loadInit()
+      await loadDevices()
+    } else {
+      tokenError.value = res.error || '验证失败'
+    }
+  } catch (e: any) {
+    tokenError.value = e.response?.data?.detail || '验证失败'
+  } finally {
+    tokenVerifying.value = false
+  }
 }
 const devices = ref<CloudDevice[]>([])
 const selectedDids = ref<string[]>([])

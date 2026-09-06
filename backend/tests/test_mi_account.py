@@ -143,7 +143,7 @@ class TestPassTokenExchange:
         assert account.token["passToken"] == "pt-1"
         assert [c["method"] for c in session.calls] == ["GET", "GET"]
         assert "serviceLoginAuth2" not in session.calls[0]["url"]
-        # 对齐 miot 插件: 携带 sdkVersion/deviceId/passToken cookie
+        # 携带 sdkVersion/deviceId/passToken cookie
         cookies = session.calls[0]["kwargs"]["cookies"]
         assert cookies["sdkVersion"] == "3.8.6"
         assert cookies["passToken"] == "pt-old"
@@ -246,7 +246,7 @@ class TestPasswordLogin:
         assert ok is True
         assert account.token["micoapi"] == ("sec-2", "st-2")
         assert account.token["passToken"] == "pt-new"
-        # STS 请求携带 miot 插件同款的 _userIdNeedEncrypt + clientSign
+        # STS 请求携带 _userIdNeedEncrypt + clientSign
         sts_url = session.calls[2]["url"]
         assert "_userIdNeedEncrypt=true" in sts_url
         assert "clientSign=" in sts_url

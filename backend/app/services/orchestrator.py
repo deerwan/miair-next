@@ -21,6 +21,11 @@ from app.engine.speaker import SpeakerManager
 
 log = logging.getLogger("miair")
 
+# 凭据恢复重启最小间隔 (秒): 恢复回调会重建服务, 重建又重新登录; 若登录持续
+# 失败而「复用缓存 serviceToken」持续成功, 无节流会形成 重启→登录失败→复用→
+# 再重启 的死循环, 并以每秒数次频率请求小米接口 (2026-09-06 生产事故)。
+RECOVERY_RESTART_MIN_INTERVAL = 60
+
 
 class Orchestrator:
     """MiAir 服务编排器"""
@@ -40,6 +45,9 @@ class Orchestrator:
         self._device_check_task: asyncio.Task | None = None
         # 重启串行化: 防止连续扫码/保存设置触发多个 restart 并发互相踩踏
         self._restart_lock = asyncio.Lock()
+        # 最近一次「凭据恢复」触发的重启时间: 节流防重启风暴 (restart 会新建
+        # AuthManager, 节流状态必须放在 orchestrator 单例上才跨实例有效)
+        self._last_recovery_restart = 0.0
 
     def get_renderer_by_did(self, did: str) -> DLNARenderer | None:
         """根据 DID 获取渲染器"""
@@ -116,6 +124,14 @@ class Orchestrator:
         """
         if self.dlna_running:
             return
+        elapsed = time.time() - self._last_recovery_restart
+        if self._last_recovery_restart and elapsed < RECOVERY_RESTART_MIN_INTERVAL:
+            log.warning(
+                f"凭据恢复重启跳过: 距上次仅 {elapsed:.0f}s "
+                f"(节流 {RECOVERY_RESTART_MIN_INTERVAL}s, 防重启风暴)"
+            )
+            return
+        self._last_recovery_restart = time.time()
         log.info("检测到凭据已自动恢复, 正在重启 DLNA/AirPlay 服务 ...")
         await self.restart_dlna_services()
 

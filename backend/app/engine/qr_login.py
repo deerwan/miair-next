@@ -1,11 +1,11 @@
-"""小米扫码登录 (移植自 songloft-plugin-miot 的 qrcode.ts)
+"""小米扫码登录
 
-流程 (仅需前 3 步, 产出 userId + passToken 即可写入 config.cookie):
+流程:
   1. GET  serviceLogin        -> 取 _sign / qs / callback
   2. GET  longPolling/loginUrl -> 取 qr(二维码图) / loginUrl / lp(长轮询URL)
   3. GET  lp (服务端长轮询)     -> 用户米家 App 扫码确认后返回 passToken + userId
-
-miservice-fork 的 cookie 登录只需 userId + passToken, 无需再换 serviceToken。
+  4. 用 passToken 立即换取 micoapi serviceToken,
+     使服务重启后可直接复用缓存 serviceToken, 同时当场验证 passToken 有效性。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import aiohttp
 
 log = logging.getLogger("miair")
 
-# ---- 常量 (对齐 songloft / xiaomusic 参考实现) ----
+# ---- 常量 ----
 ACCOUNT_BASE_URL = "https://account.xiaomi.com"
 LONG_POLLING_URL = "https://account.xiaomi.com/longPolling/loginUrl"
 # 获取二维码使用 mijia SID (比 micoapi 稳定)
@@ -183,15 +183,45 @@ class QRCodeLogin:
             # 已扫码但未确认, 继续等待
             return {"state": STATE_WAITING, "message": "已扫码, 等待确认"}
 
-        # 扫码成功: 拼装 miservice 可用的 cookie
+        # 扫码成功: 拼装 cookie 并立即换取 micoapi serviceToken
         self.state = STATE_CONFIRMED
         log.info(f"[qrcode] 扫码登录成功 userId={user_id}")
+        token_info = await self._exchange_token(pass_token, user_id, _get_str(data, "cUserId"))
         return {
             "state": STATE_CONFIRMED,
             "message": "登录成功",
             "cookie": f"userId={user_id}; passToken={pass_token}",
             "user_id": user_id,
+            "token_info": token_info,
         }
+
+    async def _exchange_token(self, pass_token: str, user_id: str, c_user_id: str) -> dict | None:
+        """用 passToken 立即换取 micoapi serviceToken
+
+        成功返回 token_info (含 services.micoapi 的 service_token/ssecurity/device_id)。
+        失败返回 None: 本项目 cookie 登录链路可在服务重启后自行换发,
+        故此处降级为仅保存 cookie, 不阻断扫码流程。
+        """
+        auth = None
+        try:
+            from app.engine.mina_auth import MINA_SID, STATE_SUCCESS, MinaAuth
+
+            auth = MinaAuth()
+            if c_user_id:
+                # 把 QR 轮询响应中的 cUserId 注入到交换会话
+                auth.set_cookie("cUserId", c_user_id)
+            result = await auth.refresh_by_pass_token(pass_token, user_id, MINA_SID)
+            if result.get("state") == STATE_SUCCESS:
+                log.info("[qrcode] 已换取 micoapi serviceToken")
+                return result.get("token_info")
+            log.warning(f"[qrcode] serviceToken 换取失败: {result.get('error')}")
+            return None
+        except Exception as e:
+            log.warning(f"[qrcode] serviceToken 换取异常: {e}")
+            return None
+        finally:
+            if auth is not None:
+                await auth.close()
 
     def is_expired(self) -> bool:
         return time.time() - self.created_at > SESSION_TTL_SECONDS

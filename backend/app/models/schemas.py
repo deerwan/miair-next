@@ -70,3 +70,26 @@ class PlayUrlRequest(BaseModel):
 
 class VolumeRequest(BaseModel):
     volume: int = Field(ge=0, le=100)
+
+
+# ---- 小米账号交互式登录 ----
+
+
+class PasswordLoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class LoginCaptchaRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    captcha: str = Field(min_length=1)
+
+
+class LoginVerifyRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+
+
+class ManualTokenRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    pass_token: str = Field(min_length=1)

@@ -56,3 +56,44 @@ export async function deleteAccount(): Promise<{ ok: boolean; message: string }>
   const { data } = await http.delete('/account')
   return data
 }
+
+// ===== 密码登录 (交互式: 登录 → 验证码/短信验证 → 成功) =====
+
+export type PasswordLoginState = 'success' | 'need_captcha' | 'need_verify' | 'failed'
+
+export interface PasswordLoginResult {
+  success: boolean
+  state?: PasswordLoginState
+  session_id?: string
+  captcha_image?: string
+  verify_type?: 'phone' | 'email'
+  message?: string
+  error?: string
+}
+
+/** 密码登录: 成功 / 需要图形验证码 / 需要短信邮箱验证 / 失败 */
+export async function passwordLogin(username: string, password: string): Promise<PasswordLoginResult> {
+  const { data } = await http.post('/account/login', { username, password })
+  return data
+}
+
+/** 提交图形验证码, 继续密码登录流程 */
+export async function submitLoginCaptcha(sessionId: string, captcha: string): Promise<PasswordLoginResult> {
+  const { data } = await http.post('/account/login/captcha', { session_id: sessionId, captcha })
+  return data
+}
+
+/** 提交短信/邮箱验证码, 完成密码登录流程 */
+export async function submitLoginVerifyCode(sessionId: string, code: string): Promise<PasswordLoginResult> {
+  const { data } = await http.post('/account/login/verify', { session_id: sessionId, code })
+  return data
+}
+
+/** 手动 Token: 立即用 passToken 换取 serviceToken 验证有效性 */
+export async function setManualToken(
+  userId: string,
+  passToken: string,
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const { data } = await http.post('/account/token', { user_id: userId, pass_token: passToken })
+  return data
+}
