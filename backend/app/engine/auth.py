@@ -8,9 +8,12 @@ import json
 import time
 
 import aiohttp
-from miservice import MiAccount, MiIOService, MiNAService
+from miservice import MiIOService, MiNAService
 
 from app.engine.config import Config
+# MiAccount: 登录内核 (app/engine/mi_account.py),
+# 请求层仍继承 miservice; 对外保持 MiAccount 命名, 测试桩按此名字打补丁
+from app.engine.mi_account import MiAccount, new_device_id, normalize_device_id
 
 log = logging.getLogger("miair")
 
@@ -118,8 +121,9 @@ class AuthManager:
             # 小米返回 code 70016 "登录验证失败"。
             #
             # 因此这里把 cookie 中的 userId/passToken/deviceId 预写入 .mi.token 文件,
-            # 让 miservice 的 MiAccount 能正常加载, 并交由 miservice.login() 用 passToken
-            # 自动换发 serviceToken 并 save_token() 回盘 (完整自愈链路)。
+            # 让 MiAccount 能正常加载, 并交由 login() (登录内核移植自 miot 插件,
+            # 见 app/engine/mi_account.py) 用 passToken 自动换发 serviceToken 并
+            # save_token() 回盘 (完整自愈链路)。
             token_home = token_store
             try:
                 os.makedirs(os.path.dirname(token_home), exist_ok=True)
@@ -137,7 +141,11 @@ class AuthManager:
                 new_token = {
                     "userId": token_data["userId"],
                     "passToken": token_data["passToken"],
-                    "deviceId": "miair_device",
+                    # 延续既有合法 deviceId, 保证跨重启稳定 (非法占位值才重新生成)
+                    "deviceId": (
+                        normalize_device_id(existing_token.get("deviceId"))
+                        or new_device_id()
+                    ),
                 }
                 if existing_token.get("micoapi"):
                     new_token["micoapi"] = existing_token["micoapi"]
@@ -228,13 +236,14 @@ class AuthManager:
                 except Exception as e:
                     self._logged_in = False
                     log.error(f"Cookie 登录异常: {e}")
-                    # miservice 在 serviceLogin 失败后会把 account.token 置为 None,
-                    # 导致下次 login() 时 self.token["deviceId"] 抛 TypeError。这里重建
-                    # MiAccount 并预置最小 token, 避免 None 残留。
+                    # 防御性重建 MiAccount 并预置最小 token, 避免异常路径上
+                    # account.token 残留 None / 缺 deviceId (MiAccount.login
+                    # 常规失败不会走到这里, 它不抛异常也不破坏 token)。
                     self.account = MiAccount(
                         self.session, "", "", token_store=token_store
                     )
-                    self.account.token = {"deviceId": "miair_device"}
+                    if not isinstance(self.account.token, dict) or not self.account.token:
+                        self.account.token = {"deviceId": new_device_id()}
         else:
             try:
                 ok = await self.account.login("micoapi")
@@ -320,10 +329,10 @@ class AuthManager:
             account = MiAccount(
                 new_session, "", "", token_store=self.config.mi_token_home
             )
+            # deviceId 由 MiAccount 自行解析并保持稳定, 注入时无需携带
             account.token = {
                 "userId": token_data["userId"],
                 "passToken": token_data["passToken"],
-                "deviceId": "miair_device",
             }
             ok = await account.login("micoapi")
             if ok:
@@ -553,10 +562,10 @@ class AuthManager:
             account = MiAccount(session, "", "", token_store=self.config.mi_token_home)
             # 直接注入凭据而非依赖 .mi.token 文件: 文件可能在上一次失败登录中
             # 被 miservice 删除, 仅靠文件加载会导致失败一次后永远换发不了。
+            # deviceId 由 MiAccount 自行解析并保持稳定, 注入时无需携带。
             account.token = {
                 "userId": user_id,
                 "passToken": pass_token,
-                "deviceId": "miair_device",
             }
             ok = await account.login("micoapi")
         except Exception as e:
