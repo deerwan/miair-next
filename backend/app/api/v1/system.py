@@ -227,7 +227,7 @@ async def recent_logs(limit: int = 200):
 async def download_logs(config=Depends(get_engine_config)):
     """下载落盘的完整日志文件 (miair.log)。
 
-    内存环形缓冲仅留最近若干行, 文件则保留本次运行期全量日志。
+    下载当前日志文件; 每份约 500KB, 轮转后的上一份位于服务端 .1 备份中。
     """
     log_file = config.log_file
     if not os.path.isfile(log_file):
