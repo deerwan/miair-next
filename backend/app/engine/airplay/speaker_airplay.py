@@ -103,6 +103,11 @@ class SpeakerAirPlay:
         必须使用 run_coroutine_threadsafe 安全调度异步任务。
         """
         log.info(f"AirPlay 音频推送到 {self.device_name}: {stream_url}")
+        if "127.0.0.1" in stream_url or "localhost" in stream_url:
+            log.error(
+                f"音频流地址 {stream_url} 是回环地址, 音箱无法访问 (将无声)!"
+                " 请通过环境变量 MIAIR_HOSTNAME=<本机局域网IP> 指定正确地址。"
+            )
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._play_on_speaker(stream_url), self._loop)
         else:

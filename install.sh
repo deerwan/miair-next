@@ -13,35 +13,73 @@ DATA_DIR="${MIAIR_DATA_DIR:-$(pwd)/miair-next-data}"
 WEB_PORT="${MIAIR_WEB_PORT:-8300}"
 
 info() { printf '\033[32m[MiAir Next]\033[0m %s\n' "$1"; }
-err()  { printf '\033[31m[错误]\033[0m %s\n' "$1" >&2; }
+warn() { printf '\033[33m[MiAir Next]\033[0m %s\n' "$1" >&2; }
+err()  { printf '\033[31m[MiAir Next]\033[0m %s\n' "$1" >&2; }
 
 # ---- 探测本机局域网 IP (host 网络下与容器内一致; 可用 MIAIR_HOSTNAME 覆盖) ----
+# 三级探测, 解决软路由 WAN 口公网 IP 场景探测失败问题:
+#   1) ip addr 枚举真实网卡地址 (过滤 docker/tailscale/veth/ppp 等虚拟接口)
+#   2) hostname -I 私有地址 (busybox 不支持 -I 时失败自动跳过)
+#   3) 默认路由源 IP, 仅当其是私网段时采用 (公网 WAN IP 会被拒绝)
 detect_lan_ip() {
   if [ -n "${MIAIR_HOSTNAME:-}" ]; then
     printf '%s' "${MIAIR_HOSTNAME}"
     return 0
   fi
-  # 优先取默认路由的源 IP (排除公网/VPN 出口与 docker/tailscale 虚拟网段)
+  # 1) 优先枚举真实网卡地址, 优先 192.168.* > 10.* > 172.16-31.*
+  if command -v ip >/dev/null 2>&1; then
+    local ip
+    ip="$(ip -o -4 addr show scope global 2>/dev/null | awk '
+      $2 !~ /^(lo|docker[0-9]*|tailscale[0-9]*|veth.*|br-[a-f0-9]+|wg[0-9]*|tun[0-9]*|tap[0-9]*|ppp[0-9]*)$/ {
+        split($4, a, "/"); candidate=a[1]
+        if (candidate ~ /^192\.168\./) { best=candidate; exit }
+        if (candidate ~ /^10\./ && best == "") best=candidate
+        if (candidate ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./ && best == "") best=candidate
+        if (fallback == "") fallback=candidate
+      }
+      END { if (best != "") print best; else if (fallback != "") print fallback }
+    ')"
+    [ -n "$ip" ] && printf '%s' "$ip" && return 0
+  fi
+  # 2) 回退: hostname -I 中的私有地址
+  if command -v hostname >/dev/null 2>&1; then
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^192\.168\./) { print $i; exit }
+        if ($i ~ /^10\./ && best == "") best=$i
+        if ($i ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./ && best == "") best=$i
+      }
+      if (best != "") print best
+    }')"
+    [ -n "$ip" ] && printf '%s' "$ip" && return 0
+  fi
+  # 3) 回退: ifconfig 私有地址 (macOS / 精简 Linux 缺少 ip 命令时)
+  if command -v ifconfig >/dev/null 2>&1; then
+    local ip
+    ip="$(ifconfig 2>/dev/null | awk '
+      /^[a-zA-Z]/ { iface=$1; sub(/:.*/, "", iface) }
+      $1 == "inet" && $2 !~ /^127\./ &&
+      iface !~ /^(lo|docker|veth|utun|awdl|llw|anpi|bridge|vmnet)/ {
+        split($2, a, "/"); candidate=a[1]
+        if (candidate ~ /^192\.168\./) { best=candidate; exit }
+        if (candidate ~ /^10\./ && best == "") best=candidate
+        if (candidate ~ /^172\.(1[6-9]|2[0-9]|3[0-1])\./ && best == "") best=candidate
+      }
+      END { if (best != "") print best }
+    ')"
+    [ -n "$ip" ] && printf '%s' "$ip" && return 0
+  fi
+  # 4) 最后兜底: 默认路由源 IP, 仅私网段采用 (软路由 WAN 公网 IP 场景会被拒绝)
   if command -v ip >/dev/null 2>&1; then
     local ip
     ip="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
     case "${ip}" in
       10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|192.168.*)
-        case "${ip}" in 172.17.*|100.64.*|100.6[5-9].*|100.7[0-9].*|100.8[0-9].*|100.9[0-9].*|100.1[0-2][0-9].*|100.127.*) ;; *)
+        case "${ip}" in 172.17.*|172.18.*) ;; *)
           printf '%s' "${ip}"; return 0 ;;
         esac ;;
     esac
-  fi
-  # 回退: 任一私网 IPv4 网卡地址 (排除虚拟网段)
-  if command -v hostname >/dev/null 2>&1; then
-    for ip in $(hostname -I 2>/dev/null); do
-      case "${ip}" in
-        10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|192.168.*)
-          case "${ip}" in 172.17.*|100.64.*|100.6[5-9].*|100.7[0-9].*|100.8[0-9].*|100.9[0-9].*|100.1[0-2][0-9].*|100.127.*) ;; *)
-            printf '%s' "${ip}"; return 0 ;;
-          esac ;;
-      esac
-    done
   fi
   return 1
 }
@@ -50,8 +88,21 @@ LAN_IP="$(detect_lan_ip || true)"
 if [ -n "${LAN_IP}" ]; then
   info "局域网 IP: ${LAN_IP} (若与实际不符, 可用 MIAIR_HOSTNAME=正确IP 覆盖)"
 else
-  info "未探测到局域网 IP, 由容器内自动检测"
+  warn "未探测到局域网 IP!"
+  warn "音频流地址将回退为 127.0.0.1, 音箱无法拉取音频流 (AirPlay/DLNA 无声)!"
+  if [ -t 0 ]; then
+    read -r -p "请输入宿主机的局域网 IP 地址: " LAN_IP
+    while [ -z "${LAN_IP}" ] || [ "${LAN_IP}" = "127.0.0.1" ]; do
+      err "IP 地址无效, 请重新输入"
+      read -r -p "请输入宿主机的局域网 IP 地址: " LAN_IP
+    done
+  else
+    warn "非交互模式, 继续安装 (容器内将尝试自动检测)。"
+    warn "如需指定, 请使用: curl -fsSL <install_url> | MIAIR_HOSTNAME=<本机局域网IP> bash"
+    warn "安装后可在启动日志中查看 \"主机名\" 行验证是否正确"
+  fi
 fi
+
 
 # ---- 检查 Docker ----
 if ! command -v docker >/dev/null 2>&1; then
