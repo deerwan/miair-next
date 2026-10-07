@@ -30,18 +30,26 @@ class RingBufferHandler(logging.Handler):
     def unsubscribe(self, q: asyncio.Queue):
         self._subscribers.discard(q)
 
+    def _broadcast(self, line: str):
+        # 在事件循环线程访问订阅集合和队列。慢客户端丢弃最旧日志,
+        # 保留最新信息, 避免 QueueFull 从异步回调中逸出。
+        for q in self._subscribers:
+            if q.full():
+                q.get_nowait()
+            q.put_nowait(line)
+
     def emit(self, record: logging.LogRecord):
         try:
             line = self.format(record)
         except Exception:
             return
         self.buffer.append(line)
-        if self._loop and self._subscribers:
-            for q in list(self._subscribers):
-                try:
-                    self._loop.call_soon_threadsafe(q.put_nowait, line)
-                except Exception:
-                    pass
+        if self._loop:
+            try:
+                self._loop.call_soon_threadsafe(self._broadcast, line)
+            except RuntimeError:
+                # 关闭事件循环后仍可能收到工作线程的最后几条日志。
+                pass
 
 
 ring_handler = RingBufferHandler()
@@ -79,7 +87,7 @@ def setup_logging(verbose: bool, log_file: str | None = None):
     console.setFormatter(formatter)
     ring_handler.setFormatter(formatter)
 
-    # 文件 — 每次启动清空, 大小上限 500KB (超过自动清空重写)
+    # 文件 — 每次启动清空当前文件, 每份上限 500KB, 保留一份轮转备份。
     file_handler = None
     if log_file:
         log_dir = os.path.dirname(log_file)
@@ -90,7 +98,7 @@ def setup_logging(verbose: bool, log_file: str | None = None):
         except OSError:
             pass
         file_handler = RotatingFileHandler(
-            log_file, maxBytes=500 * 1024, backupCount=0, encoding="utf-8",
+            log_file, maxBytes=500 * 1024, backupCount=1, encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
 
