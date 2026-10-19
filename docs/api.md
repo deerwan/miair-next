@@ -60,6 +60,15 @@
 | POST | `/api/v1/speakers/{did}/volume` | 设置音量 |
 | GET | `/api/v1/speakers/{did}/status` | 查询播放状态 |
 
+### Spotify 畅联(需鉴权)
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/spotify/status` | 运行/配对状态、当前曲目、Soloist 版本与剩余有效期 |
+| POST | `/api/v1/spotify/pair` | 返回配对引导(在 Spotify App 设备列表选择设备名) |
+| POST | `/api/v1/spotify/restart` | 重启 Soloist 接收器 |
+| POST | `/api/v1/spotify/update` | 后台重新下载最新 Soloist 二进制并重启 |
+
 ### 系统(需鉴权)
 
 | 方法 | 路径 | 说明 |

@@ -1,4 +1,4 @@
-"""AirPlay 音频 HTTP 流输出
+"""音频 HTTP 流输出
 
 将解码后的 PCM 音频数据转换为 HTTP 音频流，供小爱音箱播放。
 支持两种输出格式:
@@ -18,9 +18,7 @@ from aiohttp import web
 
 log = logging.getLogger("miair")
 
-# --- 队列参数 ---
-# 每个 ALAC 包约 8ms (352 samples @ 44100Hz)
-# 100 个包 ≈ 800ms 的缓冲上限，兼顾低延迟与抗 WiFi 抖动
+# 缓冲队列上限（约 800ms，兼顾抗抖动与实时性）
 _QUEUE_MAXSIZE = 100
 
 
@@ -31,37 +29,54 @@ class AudioStreamServer:
     根据音箱型号选择 MP3 (ffmpeg 转码) 或 WAV (直接输出) 格式。
     """
 
-    def __init__(self, hostname: str, port: int = 0, audio_format: str = "wav"):
+    _label = "AirPlay"
+
+    def __init__(
+        self,
+        hostname: str,
+        port: int = 0,
+        audio_format: str = "wav",
+        label: str = "AirPlay",
+        route_prefix: str = "airplay",
+    ):
         self.hostname = hostname
+        self._label = label
+        self._route_prefix = route_prefix.strip("/") or "airplay"
         self.port = port
-        self._audio_format = audio_format  # "mp3" or "wav"
+        self._audio_format = audio_format
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
-        # 音频数据队列 - 小队列 = 低延迟
         self._audio_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=_QUEUE_MAXSIZE)
         self._sample_rate = 44100
         self._channels = 2
-        self._sample_width = 2  # 16-bit
+        self._sample_width = 2
         self._active = False
         self._abort = False
         self._session_id = int(time.time())
-        self._client_count = 0  # 正在拉流的连接数（计数代替布尔，避免新旧连接交接时互相覆盖）
+        self._client_count = 0
         self._client_lock = threading.Lock()
 
         self._setup_routes()
 
     def _setup_routes(self):
         if self._audio_format == "mp3":
-            self._app.router.add_get("/airplay/stream.mp3", self._handle_stream_mp3)
+            self._app.router.add_get(
+                f"/{self._route_prefix}/stream.mp3", self._handle_stream_mp3
+            )
         else:
-            self._app.router.add_get("/airplay/stream.wav", self._handle_stream_wav)
+            self._app.router.add_get(
+                f"/{self._route_prefix}/stream.wav", self._handle_stream_wav
+            )
 
     @property
     def stream_url(self) -> str:
         ext = "mp3" if self._audio_format == "mp3" else "wav"
-        return f"http://{self.hostname}:{self.port}/airplay/stream.{ext}?sid={self._session_id}"
+        return (
+            f"http://{self.hostname}:{self.port}/"
+            f"{self._route_prefix}/stream.{ext}?sid={self._session_id}"
+        )
 
     @property
     def has_clients(self) -> bool:
@@ -75,7 +90,7 @@ class AudioStreamServer:
         self._site = web.TCPSite(self._runner, "0.0.0.0", self.port)
         await self._site.start()
         self.port = self._site._server.sockets[0].getsockname()[1]
-        log.info(f"AirPlay 音频流服务器: http://{self.hostname}:{self.port} (格式: {self._audio_format})")
+        log.info(f"{self._label} 音频流服务器: http://{self.hostname}:{self.port} (格式: {self._audio_format})")
 
     async def stop(self):
         self._active = False
@@ -95,7 +110,6 @@ class AudioStreamServer:
         self._active = True
         self._abort = False
         self._session_id = int(time.time())
-        # 快速清空队列
         while True:
             try:
                 self._audio_queue.get_nowait()
@@ -117,18 +131,15 @@ class AudioStreamServer:
             pass
         log.info("音频流: 停止接收 PCM 数据")
 
-    # 队列溢出日志节流: 溢出本不应发生 (丢包闸门已前移), 一旦发生要可见但不刷屏
     _DROP_LOG_INTERVAL = 10.0
 
     def write_pcm(self, data: bytes):
-        """写入 PCM 音频数据 — 非阻塞，队列满时只丢最旧的最少数量"""
+        """写入 PCM 音频数据，队列满时仅丢弃最旧的数据块"""
         if not self._active:
             return
         try:
             self._audio_queue.put_nowait(data)
         except queue.Full:
-            # 只丢到能放下本块为止 (通常 1-2 块 ≈ 10-20ms), 原实现一次丢 25%
-            # (~200ms) 会造成明显的整段跳顿
             dropped = 0
             try:
                 while True:
@@ -143,18 +154,12 @@ class AudioStreamServer:
             now = time.monotonic()
             if now - getattr(self, "_last_drop_log", 0.0) > self._DROP_LOG_INTERVAL:
                 self._last_drop_log = now
-                log.warning(f"音频队列溢出: 丢弃最旧 {dropped} 块 (~{dropped * 8}ms)")
-
-    # ============================================================
-    # WAV 模式 — 直接输出 PCM，零编码延迟
-    # ============================================================
+                log.warning(f"{self._label} 音频队列溢出: 丢弃最旧 {dropped} 块 (~{dropped * 8}ms)")
 
     def _reject_if_inactive(self) -> web.Response | None:
-        """流已停止（TEARDOWN 后）返回 404 拒绝拉取，避免音箱把空响应当成 EOF
-        反复重连该 URL 造成死循环（氛围灯闪烁、固件崩溃）。未停止返回 None。
-        """
+        """流停止后返回 404，防止音箱因空响应重复重连"""
         if not self._active:
-            log.info("AirPlay: 流已停止，拒绝拉取 (404)")
+            log.info(f"{self._label}: 流已停止，拒绝拉取 (404)")
             return web.Response(status=404, headers={"Connection": "close"})
         return None
 
@@ -192,7 +197,7 @@ class AudioStreamServer:
         )
         await response.prepare(request)
 
-        # 关闭 Nagle 算法，让小包立即发送而不等待合并
+        # 禁用 Nagle 算法以降低传输延迟
         transport = request.transport
         if transport is not None:
             sock = transport.get_extra_info('socket')
@@ -202,15 +207,11 @@ class AudioStreamServer:
 
         with self._client_lock:
             self._client_count += 1
-        self._abort = False  # 重置中断标志，允许续播
+        self._abort = False
 
-        log.info("AirPlay: 音箱开始拉取 WAV 音频流 (零编码延迟)")
+        log.info(f"{self._label}: 音箱开始拉取 WAV 音频流 (零编码延迟)")
 
-        # 使用 asyncio.Event 在写入线程和事件循环间通信
-        # 注意: 中断用连接私有的 Event 而非全局 _abort ——
-        # 歌词补发/切歌时音箱断开旧连接后立即重连同一 URL，
-        # 若旧 handler 的清理在新 handler 启动后才执行，全局标志会
-        # 被旧连接置回 True，导致新连接 reader 误退出（有歌词无声）
+        # 使用连接私有的中断事件，避免重连时被旧连接清理逻辑误置位
         loop = asyncio.get_event_loop()
         data_ready = asyncio.Event()
         pending_data: list[bytes] = []
@@ -228,7 +229,6 @@ class AudioStreamServer:
                         chunk = self._audio_queue.get(timeout=0.02)
                         if chunk is None:
                             break
-                        # 本地批量收集，避免每个 chunk 都加锁
                         local_batch = [chunk]
                         for _ in range(31):
                             try:
@@ -244,7 +244,7 @@ class AudioStreamServer:
                         empty_streak = 0
                     except queue.Empty:
                         empty_streak += 1
-                        # 3 秒无数据写入静音保持连接
+                        # 持续无数据时填充静音帧以维持 HTTP 连接
                         if empty_streak > 100:
                             silence = b'\x00' * (self._sample_rate * self._channels * self._sample_width // 50)
                             with data_lock:
@@ -261,7 +261,6 @@ class AudioStreamServer:
         reader.start()
 
         try:
-            # 发送 WAV 头
             await response.write(self._build_wav_header())
 
             while not writer_done:
@@ -271,14 +270,13 @@ class AudioStreamServer:
                     chunks = pending_data
                     pending_data = []
                 if chunks:
-                    # 批量写入：合并所有 chunk 一次性写出
                     await response.write(b"".join(chunks))
         except (ConnectionResetError, BrokenPipeError):
-            log.info("AirPlay: 音箱断开 WAV 音频流连接")
+            log.info(f"{self._label}: 音箱断开 WAV 音频流连接")
         except Exception:
             pass
         finally:
-            conn_abort.set()  # 只中断本连接的 reader，不影响后续重连
+            conn_abort.set()
             with self._client_lock:
                 self._client_count -= 1
 
@@ -286,12 +284,8 @@ class AudioStreamServer:
             await response.write_eof()
         except Exception:
             pass
-        log.info("AirPlay: WAV 音频流结束")
+        log.info(f"{self._label}: WAV 音频流结束")
         return response
-
-    # ============================================================
-    # MP3 模式 — ffmpeg 实时转码 (用于不支持 WAV 的音箱)
-    # ============================================================
 
     async def _handle_stream_mp3(self, request: web.Request) -> web.StreamResponse:
         rejected = self._reject_if_inactive()
@@ -309,7 +303,7 @@ class AudioStreamServer:
         )
         await response.prepare(request)
 
-        # 关闭 Nagle 算法
+        # 禁用 Nagle 算法
         transport = request.transport
         if transport is not None:
             sock = transport.get_extra_info('socket')
@@ -319,10 +313,10 @@ class AudioStreamServer:
 
         with self._client_lock:
             self._client_count += 1
-        self._abort = False  # 重置中断标志，允许续播
-        conn_abort = threading.Event()  # 连接私有中断标志（同 WAV 模式说明）
+        self._abort = False
+        conn_abort = threading.Event()
 
-        log.info("AirPlay: 音箱开始拉取 MP3 音频流")
+        log.info(f"{self._label}: 音箱开始拉取 MP3 音频流")
 
         import os
         ffmpeg_bin = "ffmpeg"
@@ -341,7 +335,7 @@ class AudioStreamServer:
             "-ac", str(self._channels),
             "-i", "pipe:0",
             "-acodec", "libmp3lame",
-            "-compression_level", "0",  # 最快编码速度
+            "-compression_level", "0",
             "-ab", "128k",
             "-ac", "2",
             "-ar", "44100",
@@ -388,7 +382,6 @@ class AudioStreamServer:
                         chunk = self._audio_queue.get(timeout=0.05)
                         if chunk is None:
                             break
-                        # 批量收集数据后一次性写入，减少 write 系统调用次数
                         chunks = [chunk]
                         for _ in range(15):
                             try:
@@ -422,7 +415,6 @@ class AudioStreamServer:
 
         threading.Thread(target=feed_ffmpeg, daemon=True).start()
 
-        # 从 ffmpeg stdout 读取并写给客户端
         try:
             while self._active and not conn_abort.is_set():
                 audio_data = await asyncio.to_thread(proc.stdout.read, 8192)
@@ -430,7 +422,7 @@ class AudioStreamServer:
                     break
                 await response.write(audio_data)
         except (ConnectionResetError, BrokenPipeError):
-            log.info("AirPlay: 音箱断开 MP3 音频流连接")
+            log.info(f"{self._label}: 音箱断开 MP3 音频流连接")
         except Exception:
             pass
         finally:
@@ -452,5 +444,5 @@ class AudioStreamServer:
             await response.write_eof()
         except Exception:
             pass
-        log.info("AirPlay: MP3 音频流结束")
+        log.info(f"{self._label}: MP3 音频流结束")
         return response

@@ -1,7 +1,7 @@
 <template>
   <toolbar-card>
     <template #toolbar>
-      <n-button size="small" :loading="loading" @click="load">刷新</n-button>
+      <n-button size="small" :loading="loading" @click="load()">刷新</n-button>
     </template>
 
     <n-empty v-if="speakers.length === 0" description="暂无运行中的音箱" />
@@ -10,14 +10,14 @@
       :columns="columns"
       :data="speakers"
       :bordered="false"
-      :scroll-x="720"
+      :scroll-x="900"
       size="small"
     />
   </toolbar-card>
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { h, onMounted, onUnmounted, ref } from 'vue'
 import {
   NButton, NDataTable, NEmpty, NTag, NSpace, NInput, NSwitch, NTooltip,
   useMessage, type DataTableColumns,
@@ -25,6 +25,7 @@ import {
 import { fetchSpeakers, renameSpeaker, setCompatibilityMode, type SpeakerStatus } from '@/api/speakers'
 import { getDeviceModelInfo, getDeviceImageUrl } from '@/utils/deviceModel'
 import ToolbarCard from '@/components/ToolbarCard.vue'
+import { spotifyTag, spotifyTrackText } from '@/utils/spotifyStatus'
 
 const message = useMessage()
 const speakers = ref<SpeakerStatus[]>([])
@@ -60,6 +61,26 @@ const columns: DataTableColumns<SpeakerStatus> = [
         h(NTag, { size: 'small', type: row.transport_state === 'PLAYING' ? 'success' : 'default' }, () => `DLNA: ${row.transport_state}`),
         h(NTag, { size: 'small', type: row.airplay_active ? 'success' : 'default' }, () => `AirPlay: ${row.airplay_active ? '播放' : '空闲'}`),
       ]),
+  },
+  {
+    title: 'Spotify',
+    key: 'spotify',
+    render: (row) => {
+      const tag = spotifyTag(row.spotify)
+      const track = spotifyTrackText(row.spotify)
+      return h(NSpace, { vertical: true, size: 2 }, () => [
+        h(NTag, { size: 'small', type: tag.type }, () => tag.text),
+        ...(track
+          ? [
+              h(
+                'span',
+                { style: 'font-size: 12px; color: var(--n-text-color-3, #999)' },
+                () => track,
+              ),
+            ]
+          : []),
+      ])
+    },
   },
   {
     title: '兼容模式',
@@ -124,16 +145,24 @@ async function doRename(row: SpeakerStatus) {
   }
 }
 
-async function load() {
-  loading.value = true
+async function load(silent = false) {
+  if (!silent) loading.value = true
   try {
     speakers.value = await fetchSpeakers()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || '加载音箱列表失败')
+    if (!silent) message.error(e.response?.data?.detail || '加载音箱列表失败')
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
-onMounted(load)
+// 页面处于激活状态时定时静默刷新状态
+let timer: number | undefined
+onMounted(() => {
+  load()
+  timer = window.setInterval(() => load(true), 5000)
+})
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 </script>

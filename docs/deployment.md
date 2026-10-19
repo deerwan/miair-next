@@ -67,7 +67,11 @@ docker compose up -d
 data/
 ├── conf/          # 引擎业务配置 (config.json / .mi.token / miair.log)
 ├── miair.db       # SQLite (管理员账号)
-└── secret.key     # JWT 密钥 (首次启动随机生成)
+├── secret.key     # JWT 密钥 (首次启动随机生成)
+└── spotify/       # Spotify 畅联 (可选)
+    ├── bin/       # 官方 Soloist 二进制 (运行时从 Spotify CDN 下载, 不随镜像分发)
+    ├── state/     # Spotify Connect 登录凭据 (配对后持久化)
+    └── cache/     # 播放缓存
 ```
 
 > ⚠️ **凭据存储**: `conf/config.json` 以明文保存小米账号密码 / Cookie，`conf/.mi.token` 保存 serviceToken。程序在每次保存配置与登录成功后会自动把这两个文件的权限收紧为 `600`（仅属主可读写，`secret.key` 亦同），但仍请妥善保护数据目录：不要放在公开可读的共享路径，备份文件注意加密存放。
@@ -81,6 +85,14 @@ data/
 | `MIAIR_WEB_PORT` | `8300` | Web 管理后台端口(host 网络直连,无需 `-p` 映射) |
 | `MIAIR_GITHUB_REPO` | `deerwan/miair-next` | 检查更新用的 GitHub 仓库(Releases API) |
 | `MIAIR_TOKEN_EXPIRE_HOURS` | `24` | JWT 有效期(小时) |
+
+## Spotify 畅联 (可选)
+
+让小爱音箱作为 **Spotify Connect** 设备，由手机或桌面端 Spotify App 投送播放。详细使用方法、架构剖析、音量模型与故障排查请参阅专项目录：**[Spotify 畅联指南](spotify.md)**。
+
+1. 使用 **Spotify Premium** 账号登录 [Spotify for Developers](https://developer.spotify.com/dashboard)，在 **Spotify Soloist API Key** 页面生成专用 API Key；
+2. 在管理后台「系统设置 → Spotify 畅联」中启用、填入 API Key、选择目标音箱并保存；
+3. 打开手机 Spotify App 的设备列表，选择配置的设备名完成配对；凭据将持久化保存，重启自动恢复。
 
 ## 公网暴露 (安全加固)
 

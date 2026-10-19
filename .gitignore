@@ -9,7 +9,8 @@ build/
 dist/
 
 # 前端
-frontend/node_modules/
+# 注意: 不带尾斜杠, 以便同时忽略 node_modules 软链 (依赖统一放 .workspace/deps)
+frontend/node_modules
 frontend/dist/
 frontend/.vite/
 *.local

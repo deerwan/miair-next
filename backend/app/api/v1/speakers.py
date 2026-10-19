@@ -8,6 +8,7 @@ from app.api.deps import get_engine_config, get_orchestrator
 from app.core.masking import mask_devices
 from app.models.schemas import PlayUrlRequest, RenameRequest, VolumeRequest
 from app.services.orchestrator import Orchestrator
+from app.services.spotify_status import collect_spotify_speaker_status
 
 log = logging.getLogger("miair")
 
@@ -62,6 +63,7 @@ async def list_speakers(orch: Orchestrator = Depends(get_orchestrator)):
             "current_uri": current_uri,
             "airplay_active": airplay_active,
             "airplay_client": airplay_client,
+            "spotify": collect_spotify_speaker_status(orch, did),
         })
     return speakers_info
 

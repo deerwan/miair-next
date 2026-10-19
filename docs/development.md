@@ -74,7 +74,11 @@ miair-next/
 ├── backend/                 # FastAPI 后端
 │   ├── app/
 │   │   ├── core/            # 应用级配置 / 安全 / 日志 / 脱敏
-│   │   ├── engine/          # 协议层 (DLNA / AirPlay / 小米云, 移植自 MiAir)
+│   │   ├── engine/          # 协议层 (DLNA / AirPlay / Spotify Soloist / 小米云, 移植自 MiAir)
+│   │   │   ├── dlna/        #   DLNA (SSDP / SOAP / Eventing / HTTP)
+│   │   │   ├── airplay/     #   AirPlay 接收器
+│   │   │   ├── spotify/     #   Spotify Connect (官方 Soloist 进程 + PulseAudio 采集 + WebSocket)
+│   │   │   └── audio_stream.py  # PCM -> HTTP WAV/MP3 音频流 (AirPlay/Spotify 共用)
 │   │   ├── services/        # 编排器 (Orchestrator)
 │   │   ├── models/          # Pydantic 模型
 │   │   ├── api/v1/          # REST + WebSocket 接口

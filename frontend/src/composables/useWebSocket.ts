@@ -1,11 +1,12 @@
 import { onUnmounted, ref } from 'vue'
+import type { SpotifySpeakerStatus } from '@/api/speakers'
 import { useAuthStore } from '@/stores/auth'
 import { fetchMe } from '@/api/auth'
 import router from '@/router'
 
 export interface NowPlaying {
   playing: boolean
-  source: '' | 'dlna' | 'airplay'
+  source: '' | 'dlna' | 'airplay' | 'spotify'
   title: string
   artist: string
   client: string
@@ -21,8 +22,8 @@ export interface StatusMessage {
     transport_state: string
     current_uri: string
     airplay_active: boolean
-    /** 正在播放摘要 (旧后端可能不带, 可选) */
     now_playing?: NowPlaying
+    spotify?: SpotifySpeakerStatus
   }[]
 }
 

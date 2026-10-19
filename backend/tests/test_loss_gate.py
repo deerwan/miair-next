@@ -7,8 +7,8 @@
 import logging
 import queue
 
-from app.engine.airplay.audio_stream import AudioStreamServer
 from app.engine.airplay.server import loss_gate_action
+from app.engine.audio_stream import AudioStreamServer
 
 
 class TestLossGate:

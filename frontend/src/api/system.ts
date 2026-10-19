@@ -32,6 +32,10 @@ export interface Settings {
   notify_feishu_webhook: string
   notify_feishu_secret: string
   notify_wxpusher_spt: string
+  spotify_enabled: boolean
+  spotify_device_name: string
+  spotify_did: string
+  spotify_api_key: string
   speakers: Record<string, SpeakerSetting>
   need_use_play_music_api: string[]
   device_list?: { miotDID: string; hardware: string; name: string }[]

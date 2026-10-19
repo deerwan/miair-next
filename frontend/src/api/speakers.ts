@@ -1,5 +1,19 @@
 import http from './http'
 
+export interface SpotifySpeakerStatus {
+  enabled: boolean
+  configured: boolean
+  is_target: boolean
+  active: boolean
+  running: boolean
+  paired: boolean
+  playback: 'idle' | 'playing' | 'paused' | 'buffering' | string
+  device_name: string
+  track: { title: string; artist: string; album: string; cover: string } | null
+  volume: number | null
+  last_error: string
+}
+
 export interface SpeakerStatus {
   did: string
   name: string
@@ -12,6 +26,7 @@ export interface SpeakerStatus {
   current_uri: string
   airplay_active: boolean
   airplay_client: string
+  spotify?: SpotifySpeakerStatus
 }
 
 export interface CloudDevice {

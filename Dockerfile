@@ -1,40 +1,41 @@
-# syntax=docker/dockerfile:1
+ARG NODE_IMAGE=node:20-alpine
+ARG PYTHON_IMAGE=python:3.12-slim-trixie
 
-# ---------- 阶段 1: 构建前端 (Vue3 + Vite) ----------
-FROM node:20-alpine AS frontend
+FROM ${NODE_IMAGE} AS frontend
+ARG NPM_REGISTRY=
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+    && npm install
 COPY frontend/ ./
 RUN npm run build
 
-# ---------- 阶段 2: Python 运行时 ----------
-FROM python:3.12-slim
+# Soloist 二进制依赖 glibc >= 2.38 (Debian trixie)
+FROM ${PYTHON_IMAGE}
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 LABEL org.opencontainers.image.title="MiAir Next"
 LABEL org.opencontainers.image.description="Make Xiaomi AI speakers act as DLNA / AirPlay renderers, with a modern admin panel"
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
-# 协议层依赖: ffmpeg (av 音频转码), libportaudio2, dnsutils
+# 音频转码、网络探测与 Soloist/PulseAudio 运行依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libportaudio2 \
     dnsutils \
+    libatomic1 \
+    pulseaudio \
+    pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
 
-# 先装依赖 (利用缓存层)
 COPY backend/pyproject.toml ./
-RUN pip install --no-cache-dir . --root-user-action=ignore
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" . --root-user-action=ignore
 
-# 拷贝后端源码
 COPY backend/ ./
-
-# 拷贝前端构建产物到后端静态目录 (由 FastAPI 托管 SPA)
 COPY --from=frontend /web/dist/ ./app/static/
 
-# 数据目录 (SQLite / JWT 密钥 / 引擎配置持久化)
 ENV MIAIR_DATA=/app/data \
     MIAIR_WEB_HOST=0.0.0.0 \
     MIAIR_WEB_PORT=8300 \

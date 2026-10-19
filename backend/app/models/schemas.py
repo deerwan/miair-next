@@ -55,6 +55,10 @@ class SettingsPayload(BaseModel):
     notify_feishu_webhook: str | None = None
     notify_feishu_secret: str | None = None
     notify_wxpusher_spt: str | None = None
+    spotify_enabled: bool | None = None
+    spotify_device_name: str | None = None
+    spotify_did: str | None = None
+    spotify_api_key: str | None = None
     speakers: dict[str, SpeakerSettingPayload] | None = None
 
 

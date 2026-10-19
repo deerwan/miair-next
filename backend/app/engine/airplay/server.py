@@ -24,7 +24,7 @@ from typing import Callable
 import av
 from Crypto.Cipher import AES
 
-from app.engine.airplay.audio_stream import AudioStreamServer
+from app.engine.audio_stream import AudioStreamServer
 from app.engine.airplay.mdns import AirPlayMDNS
 from app.engine.airplay.playfair import PlayFair
 from app.engine.airplay import dxxp

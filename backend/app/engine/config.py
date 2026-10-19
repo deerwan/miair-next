@@ -105,6 +105,10 @@ class Config:
     notify_feishu_webhook: str = ""
     notify_feishu_secret: str = ""
     notify_wxpusher_spt: str = ""
+    spotify_enabled: bool = False
+    spotify_device_name: str = ""
+    spotify_did: str = ""
+    spotify_api_key: str = ""
     speakers: dict = field(default_factory=dict)
 
     # 保存配置的线程锁（类级别共享）

@@ -41,6 +41,120 @@
             </n-form>
           </n-tab-pane>
 
+          <n-tab-pane name="spotify" tab="Spotify 畅联">
+            <n-alert type="info" :show-icon="true" :bordered="false" style="margin-top: 8px">
+              通过 Spotify 官方 <b>Soloist</b> 让小爱音箱成为 Spotify Connect 设备。需要
+              <b>Spotify Premium</b> 账号生成 Soloist API Key；Soloist 二进制由程序从官方 CDN 下载，
+              官方构建 90 天过期后会自动更新。
+            </n-alert>
+            <n-form :label-placement="labelPlacement" :label-width="labelWidth" :show-feedback="false" style="margin-top: 16px">
+              <n-space vertical :size="18">
+                <n-form-item label="启用 Spotify 畅联">
+                  <n-switch v-model:value="form.spotify_enabled" />
+                </n-form-item>
+                <n-form-item label="Spotify 设备名">
+                  <div class="field-with-tip">
+                    <n-input v-model:value="form.spotify_device_name" placeholder="留空则使用目标音箱名称" clearable />
+                    <n-text depth="3" class="field-tip">会显示在 Spotify App 的设备列表中。</n-text>
+                  </div>
+                </n-form-item>
+                <n-form-item label="目标音箱">
+                  <div class="field-with-tip">
+                    <n-select
+                      v-if="speakerOptions.length"
+                      v-model:value="form.spotify_did"
+                      :options="speakerOptions"
+                      placeholder="留空使用第一台可用音箱"
+                      clearable
+                      style="max-width: 400px"
+                    />
+                    <n-text v-else depth="3" class="field-tip">
+                      暂无可用音箱: 请先在「账号配置」完成小米账号登录并选择设备; 留空时自动使用第一台在线音箱。
+                    </n-text>
+                  </div>
+                </n-form-item>
+                <n-form-item label="Soloist API Key">
+                  <div class="field-with-tip">
+                    <n-input
+                      v-model:value="form.spotify_api_key"
+                      type="password"
+                      show-password-on="click"
+                      placeholder="未修改请回写脱敏值；清空将删除 Key"
+                      clearable
+                    />
+                    <n-text depth="3" class="field-tip">
+                      在
+                      <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">
+                        Spotify for Developers
+                      </a>
+                      的「Spotify Soloist API Key」页面生成（需 Premium）。Key 仅保存在本机数据目录，不会上传。
+                    </n-text>
+                  </div>
+                </n-form-item>
+              </n-space>
+            </n-form>
+
+            <n-space align="center" :size="10" style="margin-top: 20px">
+              <n-text strong>运行状态</n-text>
+              <n-button size="tiny" :loading="spotifyLoading" @click="loadSpotifyStatus">刷新</n-button>
+            </n-space>
+            <n-alert v-if="spotifyStatus?.last_error" type="error" :show-icon="true" style="margin-top: 8px">
+              {{ spotifyStatus.last_error }}
+            </n-alert>
+            <n-alert v-if="spotifyStatus?.idle_reason" type="warning" :show-icon="true" style="margin-top: 8px">
+              {{ spotifyStatus.idle_reason }}
+            </n-alert>
+            <n-descriptions v-if="spotifyStatus" :column="isMobile ? 1 : 2" bordered size="small" style="margin-top: 12px">
+              <n-descriptions-item label="运行状态">
+                <n-tag :type="spotifyStatus.running ? 'success' : 'default'" size="small">
+                  {{ spotifyStatus.running ? '运行中' : '未运行' }}
+                </n-tag>
+              </n-descriptions-item>
+              <n-descriptions-item label="Spotify 配对">
+                <n-tag :type="spotifyStatus.paired ? 'success' : 'warning'" size="small">
+                  {{ spotifyStatus.paired ? '已配对' : '未配对' }}
+                </n-tag>
+              </n-descriptions-item>
+              <n-descriptions-item label="设备名">{{ spotifyStatus.device_name || '-' }}</n-descriptions-item>
+              <n-descriptions-item label="目标音箱">{{ spotifyStatus.target_name || '-' }}</n-descriptions-item>
+              <n-descriptions-item label="Soloist 版本">
+                <span v-if="spotifyStatus.binary.installed">v{{ spotifyStatus.binary.version }}</span>
+                <n-tag v-else size="small" type="warning">未安装</n-tag>
+                <n-tag v-if="spotifyStatus.binary.downloading" size="small" type="info" style="margin-left: 6px">
+                  下载中
+                </n-tag>
+              </n-descriptions-item>
+              <n-descriptions-item label="构建剩余">
+                {{ spotifyStatus.binary.days_left != null ? `${spotifyStatus.binary.days_left} 天` : '-' }}
+              </n-descriptions-item>
+              <n-descriptions-item label="当前曲目" :span="2">
+                <n-space align="center" :size="10">
+                  <n-image
+                    v-if="spotifyStatus?.track?.cover"
+                    :src="spotifyStatus.track.cover"
+                    width="52"
+                    height="52"
+                    :preview-disabled="true"
+                    style="border-radius: 6px"
+                  />
+                  <n-text>{{ spotifyTrackText }}</n-text>
+                </n-space>
+              </n-descriptions-item>
+            </n-descriptions>
+            <n-space :size="8" style="margin-top: 12px">
+              <n-button size="small" :disabled="!spotifyStatus" :loading="spotifyActionLoading" @click="doSpotifyRestart">
+                重启 Spotify
+              </n-button>
+              <n-button size="small" :disabled="!spotifyStatus?.running" :loading="spotifyActionLoading" @click="doSpotifyUpdate">
+                更新 Soloist
+              </n-button>
+              <n-button size="small" :disabled="!spotifyStatus?.running" @click="doSpotifyPair">配对引导</n-button>
+            </n-space>
+            <n-text depth="3" class="field-tip" style="margin-top: 10px; display: block">
+              提示: 保存设置后服务会热重启；首次使用需在手机 Spotify App 的设备列表中选择上方设备名完成配对。
+            </n-text>
+          </n-tab-pane>
+
           <n-tab-pane name="touchscreen" tab="触屏显示">
             <n-alert type="warning" :show-icon="true" :bordered="false" style="margin-top: 8px">
               实验性功能: 依赖各发送端的元数据格式与小米曲库收录情况, 部分 App/歌曲可能无法显示歌词封面。
@@ -243,7 +357,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NSpace, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
@@ -253,6 +367,13 @@ import {
 } from 'naive-ui'
 import { fetchSettings, saveSettings, restartProcess, checkUpdate, testNotify, type UpdateInfo } from '@/api/system'
 import { fetchLoginLogs, type LoginLogItem } from '@/api/auth'
+import {
+  fetchSpotifyStatus,
+  fetchSpotifyPairHint,
+  restartSpotify,
+  updateSpotifyBinary,
+  type SpotifyStatus,
+} from '@/api/spotify'
 import { useAppStore } from '@/stores/app'
 import { useIsMobile } from '@/composables/useIsMobile'
 
@@ -273,7 +394,7 @@ const labelWidth = computed(() => (isMobile.value ? undefined : 160))
 // tab 与 URL query 同步 (/settings?tab=notify), 刷新不丢位置
 const route = useRoute()
 const router = useRouter()
-const TAB_KEYS = ['playback', 'service', 'touchscreen', 'notify', 'loginlog', 'other', 'about']
+const TAB_KEYS = ['playback', 'service', 'spotify', 'touchscreen', 'notify', 'loginlog', 'other', 'about']
 const initialTab = String(route.query.tab || '')
 const tab = ref(TAB_KEYS.includes(initialTab) ? initialTab : 'playback')
 
@@ -281,6 +402,12 @@ function onTabChange(value: string) {
   router.replace({ query: { ...route.query, tab: value } })
   // 登录日志懒加载: 首次切到该 tab 时拉取
   if (value === 'loginlog' && loginLogs.value.length === 0) loadLoginLogs()
+  if (value === 'spotify') {
+    loadSpotifyStatus()
+    startSpotifyPolling()
+  } else {
+    stopSpotifyPolling()
+  }
 }
 
 // 面板登录日志
@@ -329,7 +456,14 @@ const form = reactive({
   notify_feishu_webhook: '',
   notify_feishu_secret: '',
   notify_wxpusher_spt: '',
+  spotify_enabled: false,
+  spotify_device_name: '',
+  spotify_did: '',
+  spotify_api_key: '',
 })
+
+// 目标音箱候选列表
+const speakerOptions = ref<SelectOption[]>([])
 
 // 仅在 DLNA 使用默认端口 8200 时, 提示可能被 fnOS 自带 DLNA 占用
 const dlnaPortHint = computed(() => {
@@ -337,14 +471,14 @@ const dlnaPortHint = computed(() => {
   return '端口 8200 可能被 fnOS 自带 DLNA 占用导致启动失败。可改为 8201 等空闲端口, 或在 fnOS 设置 → 文件共享协议中关闭自带 DLNA。'
 })
 
-// 通知方式候选 (青龙式单选)
+// 通知渠道选项
 const notifyTypeOptions = [
   { label: '关闭', value: '' },
   { label: '飞书机器人', value: 'feishu' },
   { label: 'WxPusher 极简推送', value: 'wxpusher' },
 ]
 
-// 预设小米云封面 (照搬 songloft 后台下拉, audioID = 曲库真实歌曲 ID, cover = 预览图 CDN)
+// 预设小米云封面 (audioID: 曲库歌曲 ID, cover: 预览图 CDN)
 interface CoverOption extends SelectOption {
   label: string
   value: string
@@ -402,6 +536,16 @@ async function load() {
     form.notify_feishu_webhook = s.notify_feishu_webhook
     form.notify_feishu_secret = s.notify_feishu_secret
     form.notify_wxpusher_spt = s.notify_wxpusher_spt
+    form.spotify_enabled = s.spotify_enabled ?? false
+    form.spotify_device_name = s.spotify_device_name || ''
+    form.spotify_did = s.spotify_did || ''
+    form.spotify_api_key = s.spotify_api_key || ''
+    speakerOptions.value = Object.values(s.speakers || {})
+      .filter((sp) => sp.enabled !== false)
+      .map((sp) => ({
+        label: sp.dlna_name || sp.name || sp.did,
+        value: sp.did,
+      }))
     info.version = s.version
     info.engine_version = s.engine_version
     info.hostname = s.hostname
@@ -489,15 +633,89 @@ async function doCheckUpdate() {
   }
 }
 
+const spotifyStatus = ref<SpotifyStatus | null>(null)
+const spotifyLoading = ref(false)
+const spotifyActionLoading = ref(false)
+let spotifyTimer: ReturnType<typeof setInterval> | undefined
+
+const spotifyTrackText = computed(() => {
+  const t = spotifyStatus.value?.track
+  if (!t) return '-'
+  return t.artist ? `${t.title} - ${t.artist}` : t.title
+})
+
+async function loadSpotifyStatus() {
+  spotifyLoading.value = true
+  try {
+    spotifyStatus.value = await fetchSpotifyStatus()
+  } catch {
+  } finally {
+    spotifyLoading.value = false
+  }
+}
+
+function startSpotifyPolling() {
+  stopSpotifyPolling()
+  spotifyTimer = setInterval(loadSpotifyStatus, 5000)
+}
+
+function stopSpotifyPolling() {
+  if (spotifyTimer) {
+    clearInterval(spotifyTimer)
+    spotifyTimer = undefined
+  }
+}
+
+async function doSpotifyRestart() {
+  spotifyActionLoading.value = true
+  try {
+    const r = await restartSpotify()
+    message.success(r.message || 'Spotify 服务已重启')
+    await loadSpotifyStatus()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重启 Spotify 失败')
+  } finally {
+    spotifyActionLoading.value = false
+  }
+}
+
+async function doSpotifyUpdate() {
+  spotifyActionLoading.value = true
+  try {
+    const r = await updateSpotifyBinary()
+    message.info(r.message || '正在更新 Soloist')
+    await loadSpotifyStatus()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '更新 Soloist 失败')
+  } finally {
+    spotifyActionLoading.value = false
+  }
+}
+
+async function doSpotifyPair() {
+  try {
+    const r = await fetchSpotifyPairHint()
+    message.info(r.message, { duration: 8000 })
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '获取配对信息失败')
+  }
+}
+
 onMounted(() => {
   load()
   // 带 ?tab=loginlog 直接进入时也需拉取日志
   if (tab.value === 'loginlog') loadLoginLogs()
+  if (tab.value === 'spotify') {
+    loadSpotifyStatus()
+    startSpotifyPolling()
+  }
 })
+
+onUnmounted(() => stopSpotifyPolling())
 </script>
 
 <style scoped>
-/* 输入框 + 下方说明文字 (青龙式 extra) */
+/* 表单项下方提示文本 */
 .field-with-tip {
   width: 100%;
 }
@@ -506,7 +724,7 @@ onMounted(() => {
   display: block;
   font-size: 12px;
   margin-top: 4px;
-  /* 长链接在窄屏上允许任意位置折行, 避免撑破容器 */
+  /* 允许长链接折行 */
   word-break: break-all;
 }
 

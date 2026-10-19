@@ -18,6 +18,7 @@ from app.engine.dlna.renderer import DLNARenderer
 from app.engine.dlna.ssdp import SSDPServer
 from app.engine.restart import _restart_process
 from app.engine.speaker import SpeakerManager
+from app.engine.spotify.receiver import SpotifyReceiver
 
 log = logging.getLogger("miair")
 
@@ -42,6 +43,7 @@ class Orchestrator:
         self.device_server: DeviceServer | None = None
         self.dlna_running = False
         self.airplay_manager: AirPlayManager | None = None
+        self.spotify: SpotifyReceiver | None = None
         self._device_check_task: asyncio.Task | None = None
         # 重启串行化: 防止连续扫码/保存设置触发多个 restart 并发互相踩踏
         self._restart_lock = asyncio.Lock()
@@ -210,6 +212,8 @@ class Orchestrator:
             # 启动 AirPlay 服务 - 每个音箱一个
             await self._start_airplay_for_speakers()
 
+            await self._start_spotify()
+
             log.info(f"MiAir Next 服务启动完成! 共 {len(self.renderers)} 个音箱")
             log.info("手机 DLNA / AirPlay 现在应该能发现这些设备了")
 
@@ -242,6 +246,46 @@ class Orchestrator:
         except Exception as e:
             log.error(f"启动 AirPlay 服务失败: {e}")
 
+    async def _start_spotify(self):
+        """启动 Spotify Connect 接收器 (单设备, 绑定选定的音箱)"""
+        await self._stop_spotify()
+        if not getattr(self.config, "spotify_enabled", False):
+            return
+        if not (self.config.spotify_api_key or "").strip():
+            log.info("Spotify 已启用但未配置 API Key, 跳过启动")
+            return
+        controllers = self.speaker_manager.controllers if self.speaker_manager else {}
+        if not controllers:
+            log.warning("没有可用的音箱, 无法启动 Spotify 接收器")
+            return
+        did = (self.config.spotify_did or "").strip()
+        controller = controllers.get(did) if did else None
+        if controller is None:
+            controller = next(iter(controllers.values()))
+            if did:
+                log.warning(
+                    f"Spotify 目标音箱 did={did} 不在线, 回退到 "
+                    f"{controller.speaker.get_dlna_name()}"
+                )
+        self.spotify = SpotifyReceiver(self.config, controller, self.config.hostname)
+        try:
+            await self.spotify.start()
+        except Exception as e:  # noqa: BLE001
+            # 保留实例供 Web 面板展示失败原因
+            log.error(f"启动 Spotify 接收器失败: {e}")
+
+    async def _stop_spotify(self):
+        """停止 Spotify 接收器 (幂等)"""
+        if self.spotify is not None:
+            try:
+                await self.spotify.stop()
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"停止 Spotify 接收器失败: {e}")
+            self.spotify = None
+
+    def get_spotify_receiver(self) -> SpotifyReceiver | None:
+        return self.spotify
+
     async def restart_dlna_services(self):
         """重启 DLNA 服务 (用户通过 Web 修改配置后调用)"""
         async with self._restart_lock:
@@ -250,6 +294,8 @@ class Orchestrator:
             if self.airplay_manager:
                 await self.airplay_manager.stop()
                 self.airplay_manager = None
+            # 停止 Spotify 接收器，避免引用已失效的认证实例
+            await self._stop_spotify()
             # 清空旧 controllers, 防止 AirPlay 停止回调触发旧 auth 重新登录
             # (旧 controller 持有旧 auth 引用, close() 后回调会触发并发登录)
             if self.speaker_manager:
@@ -286,6 +332,7 @@ class Orchestrator:
         if self.airplay_manager:
             await self.airplay_manager.stop()
             self.airplay_manager = None
+        await self._stop_spotify()
         await self.auth.close()
 
         log.info("MiAir Next 已关闭")

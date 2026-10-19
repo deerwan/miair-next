@@ -1,6 +1,6 @@
 # MiAir Next
 
-让小米小爱音箱化身 **DLNA 渲染器** 与 **AirPlay 接收器**，并附带一个现代化的 Web 管理后台。
+让小米小爱音箱化身 **DLNA 渲染器**、**AirPlay 接收器** 与 **Spotify Connect 设备**，并附带一个现代化的 Web 管理后台。
 
 本项目在 [MiAir](https://github.com/KiriChen-Wind/MiAir) 协议层的基础上重构：后端改用 **FastAPI**，前端使用 **Vue 3 + Vite + Naive UI** 自建轻量管理后台，通过 GitHub Actions 云端构建多架构 Docker 镜像，一条命令即可部署。
 
@@ -12,12 +12,19 @@
 
 - **DLNA (UPnP AV)**：把小爱音箱注册为可投送的媒体渲染器，支持网易云音乐、QQ 音乐等 App 投送。
 - **AirPlay**：作为 AirPlay 接收器，支持 iPhone / Mac 音频投送（FairPlay / HAP 配对）。
+- **Spotify 畅联 (Spotify Connect)**：
+  - **官方客户端支持**：内置 Spotify 官方 Soloist 引擎，小爱音箱可作为 Spotify Connect 设备被手机、平板及桌面端 App 发现并投送播放。
+  - **支持跨网音乐控制**：区别于 DLNA / AirPlay 严格受限于同一局域网组播发现，Spotify Connect 基于云端会话同步；配对后手机无论处于移动蜂窝网络（4G/5G）还是异地 Wi-Fi，只要登录同一 Spotify 账号，均可随时随地远程向音箱投送、切歌与调音。
+  - **自动二进制管理**：Soloist 官方二进制在首次启用时按架构自动从 Spotify CDN 下载至数据目录，避免内置分发；支持 90 天构建到期自动拉取新版热重启，并支持 Web 后台一键检测更新。
+  - **活动设备门控**：精确追踪 Connect 设备状态，仅当本机为当前活跃播放设备时才向音箱推流，避免其他端播放时误唤醒；播放转移或登出时即刻停止推流。
+  - **线性无损调音**：开播初始音量遵循后台配置并将音箱硬件拉满，由 Spotify App 音量滑杆进行 1:1 软件线性调音；暂停或断开后硬件音量自动还原为默认值，防止闲置爆音。
+  - **触屏歌词与封面**：自动提取曲目元数据并智能匹配小米曲库，带屏小爱音箱可同步呈现滚动歌词与高清专辑封面。
 - **小米云控制**：通过小米账号 API 控制音箱播放、音量、状态查询。
 - **触屏封面定制**：在「触屏显示」设置中通过下拉选择小米云封面（audioID），带屏/触屏音箱走小米云播放时显示对应封面与歌词，保存后重新投送即可生效。
-- **Web 管理后台**：登录鉴权（含登录失败限速、登录日志）、总览面板（WebSocket 实时推送）、设备管理、播放控制、账号配置、系统设置、运行日志（可下载完整日志文件）。
+- **Web 管理后台**：登录鉴权（含登录失败限速、登录日志）、总览面板（WebSocket 实时推送当前曲目与播放源）、设备管理、播放控制、账号配置、系统设置、运行日志（可下载完整日志文件）。
 - **通知推送**：登录过期等事件通过飞书 / WxPusher 推送提醒。
 - **主题与更新**：亮色 / 暗色 / 跟随系统三态主题（默认跟随系统），面板内检查 GitHub 最新版本。
-- **热重启子服务**：保存配置后热重启 DLNA/AirPlay，无需重启整个进程。
+- **热重启子服务**：保存配置后热重启 DLNA/AirPlay/Spotify 接收器，无需重启整个容器或后台进程。
 
 ---
 
@@ -47,11 +54,27 @@ docker run -d \
 
 ---
 
+## 📦 依赖组件
+
+| 组件 | 类型 | 用途说明 |
+| --- | --- | --- |
+| `FastAPI` / `Uvicorn` | Python 框架 | 现代异步后端 REST API 与 WebSocket 实时状态推送 |
+| `Vue 3` / `Vite` / `Naive UI` | 前端技术栈 | 响应式轻量 Web 管理后台，支持亮色/暗色三态主题 |
+| `ffmpeg` | 系统依赖 | 音频实时转码与流式处理（支持 WAV 与 MP3 格式输出） |
+| `pulseaudio` / `pulseaudio-utils` | 系统依赖 | 提供容器内虚拟音频输出（null sink）与低延迟 PCM 音频捕获（parec） |
+| `libportaudio2` | 系统依赖 | 底层跨平台音频 I/O 支持 |
+| `libatomic1` | 系统依赖 | Spotify Soloist 二进制动态依赖库 |
+| `dnsutils` | 系统依赖 | 网络环境与 DNS 解析探测诊断 |
+| `Spotify Soloist` | 官方客户端 | Spotify Connect 官方嵌入式二进制引擎（运行时按需从官方 CDN 自动下载，不打包分发） |
+
+---
+
 ## 📚 文档
 
 | 文档 | 内容 |
 | --- | --- |
 | [部署与配置](docs/deployment.md) | 安装方式、manage.sh 管理脚本、镜像标签策略、数据目录、环境变量、升级 |
+| [Spotify 畅联指南](docs/spotify.md) | Spotify Connect 配置、API Key 获取、音量控制模型、离线安装与故障排查 |
 | [接口文档](docs/api.md) | REST / WebSocket 接口清单、鉴权说明、快速验证 |
 | [本地开发](docs/development.md) | 前后端启动、测试、构建镜像、发版流程、项目结构 |
 

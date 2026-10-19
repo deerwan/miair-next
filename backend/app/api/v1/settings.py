@@ -57,6 +57,10 @@ async def get_settings_api(
         "default_audio_id": config.default_audio_id,
         "touchscreen_lyrics": config.touchscreen_lyrics,
         "default_cover_url": config.default_cover_url,
+        "spotify_enabled": config.spotify_enabled,
+        "spotify_device_name": config.spotify_device_name,
+        "spotify_did": config.spotify_did,
+        "spotify_api_key": mask_secret(config.spotify_api_key),
     }
 
     speakers_info = {}
@@ -129,6 +133,17 @@ async def save_settings_api(
         # 回写的是脱敏占位符 (未修改) 时保留已存储的真实 SPT
         config.notify_wxpusher_spt = unmask_secret(
             payload.notify_wxpusher_spt.strip(), config.notify_wxpusher_spt
+        )
+    if payload.spotify_enabled is not None:
+        config.spotify_enabled = payload.spotify_enabled
+    if payload.spotify_device_name is not None:
+        config.spotify_device_name = payload.spotify_device_name.strip()
+    if payload.spotify_did is not None:
+        config.spotify_did = payload.spotify_did.strip()
+    if payload.spotify_api_key is not None:
+        # 回写脱敏占位符时保留原密钥
+        config.spotify_api_key = unmask_secret(
+            payload.spotify_api_key.strip(), config.spotify_api_key
         )
 
     if payload.speakers:

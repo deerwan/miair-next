@@ -8,7 +8,7 @@
         <template v-if="nowPlaying.artist"> — {{ nowPlaying.artist }}</template>
         <n-text depth="3">
           ｜{{ nowPlaying.speakerName }}
-          {{ nowPlaying.source === 'airplay' ? `· AirPlay (${nowPlaying.client})` : '· DLNA' }}
+          {{ sourceText(nowPlaying) }}
         </n-text>
       </template>
       <template v-else>当前空闲, 没有正在播放的内容</template>
@@ -62,10 +62,16 @@
                 <n-tag :type="sp.airplay_active ? 'success' : 'default'" size="small">
                   AirPlay: {{ sp.airplay_active ? '播放中' : '空闲' }}
                 </n-tag>
+                <n-tag :type="spotifyTag(sp.spotify).type" size="small">
+                  {{ spotifyTag(sp.spotify).text }}
+                </n-tag>
               </n-space>
             </template>
             <div v-if="sp.now_playing?.playing && sp.now_playing.title" class="uri">
               ♪ {{ sp.now_playing.title }}<template v-if="sp.now_playing.artist"> — {{ sp.now_playing.artist }}</template>
+            </div>
+            <div v-if="spotifyTrackText(sp.spotify)" class="uri">
+              🎧 {{ spotifyTrackText(sp.spotify) }}
             </div>
             <div v-if="sp.current_uri" class="uri">{{ sp.current_uri }}</div>
           </n-thing>
@@ -83,12 +89,28 @@ import {
 } from 'naive-ui'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { fetchStatus, type SystemStatus } from '@/api/system'
+import { spotifyTag, spotifyTrackText } from '@/utils/spotifyStatus'
+import type { NowPlaying } from '@/composables/useWebSocket'
 
 const { connected, status } = useWebSocket()
 
 const playingCount = computed(
-  () => status.value?.speakers.filter((s) => s.transport_state === 'PLAYING' || s.airplay_active).length ?? 0,
+  () =>
+    status.value?.speakers.filter(
+      (s) =>
+        s.transport_state === 'PLAYING' ||
+        s.airplay_active ||
+        s.spotify?.playback === 'playing' ||
+        s.spotify?.playback === 'buffering',
+    ).length ?? 0,
 )
+
+/** 正在播放来源文案 */
+function sourceText(np: NowPlaying): string {
+  if (np.source === 'airplay') return `· AirPlay${np.client ? ` (${np.client})` : ''}`
+  if (np.source === 'spotify') return `· Spotify${np.client ? ` (${np.client})` : ''}`
+  return '· DLNA'
+}
 
 // 正在播放摘要 (取第一个播放中的音箱; AirPlay 优先, 后端已按实际发声路线填好)
 const nowPlaying = computed(() => {

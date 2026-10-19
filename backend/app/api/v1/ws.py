@@ -8,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.logging import ring_handler
 from app.core.security import decode_access_token
+from app.services.spotify_status import collect_spotify_speaker_status
 
 log = logging.getLogger("miair")
 
@@ -37,23 +38,37 @@ def _collect_status(orch) -> dict:
                 # 不少 App 切歌时不更新, 展示出来常与实际内容不符
                 # (设备名与"播放中"状态是可靠的, 保留)
                 source = "airplay"
+        spotify_info = collect_spotify_speaker_status(orch, did)
         if airplay_active:
             # AirPlay 实际发声时清掉可能残留的 DLNA 标题, 避免串台
             title = artist = ""
+        elif (
+            not source
+            and spotify_info.get("is_target")
+            and spotify_info.get("active")
+            and spotify_info.get("playback") in ("playing", "buffering")
+        ):
+            track = spotify_info.get("track") or {}
+            title = track.get("title", "")
+            artist = track.get("artist", "")
+            source = "spotify"
+            airplay_client = spotify_info.get("device_name", "")
         speakers.append({
             "did": did,
             "dlna_name": controller.speaker.get_dlna_name(),
             "transport_state": renderer.transport_state if renderer else "UNKNOWN",
             "current_uri": renderer.current_uri if renderer else "",
             "airplay_active": airplay_active,
-            # 正在播放摘要 (总览首行展示): 空串表示无元数据/未播放
             "now_playing": {
-                "playing": bool(renderer and renderer.transport_state == "PLAYING") or airplay_active,
+                "playing": bool(renderer and renderer.transport_state == "PLAYING")
+                or airplay_active
+                or (source == "spotify"),
                 "source": source,
                 "title": title,
                 "artist": artist,
                 "client": airplay_client,
             },
+            "spotify": spotify_info,
         })
     return {
         "type": "status",
