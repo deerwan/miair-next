@@ -1,0 +1,160 @@
+# 构建 + GitHub Container Registry 版本发布 (唯一的镜像发布工作流)
+#
+# 发布策略 (2026-10-20 调整):
+#   - 只在 GitHub 上发布镜像 (GHCR: ghcr.io/<owner>/<repo>), 不使用 Docker Hub
+#   - 镜像标签 = 版本号: v0.7.0 -> 0.7.0 / 0.7 / latest
+#   - 非 main 分支普通 push: 仅做多架构构建验证, 不推送
+#   - push v*.*.* tag 或手动指定 version: 构建并推送 GHCR
+#
+# 本工作流已替代 docker-publish.yml: 不再推送 Docker Hub, 只在 GitHub (GHCR) 发布。
+name: Build / Release Docker Image (GitHub)
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*.*.*'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'img/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手动发布版本号 (如 0.7.0); 留空则只构建不推送'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 测试关卡: 后端 pytest/ruff + 前端 typecheck/build, 失败则不构建镜像
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Backend lint (ruff)
+        working-directory: backend
+        run: |
+          pip install -e ".[dev]"
+          ruff check .
+
+      - name: Backend tests (pytest)
+        working-directory: backend
+        run: python -m pytest tests/ -v
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend typecheck & build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+  # 多架构构建; 普通分支只验证, tag/手动版本才推送 GHCR
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up QEMU (multi-arch support)
+        uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # 版本 tag: v0.7.0 -> 0.7.0 / 0.7 / latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # 手动发布: 直接使用输入的版本号
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
+
+      - name: Log in to GHCR
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build / push image (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          # 仅版本 tag 或手动指定版本时推送; 普通分支只构建验证
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Job summary
+        run: |
+          {
+            echo "### Docker 镜像构建完成"
+            echo ""
+            echo "- 触发: \`${{ github.event_name }}\` (\`${{ github.ref_name }}\`)"
+            echo "- 提交: \`${{ github.sha }}\`"
+            echo "- 平台: \`linux/amd64, linux/arm64\`"
+            if [ "${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}" = "true" ]; then
+              echo "- 已发布 GHCR:"
+              echo '```'
+              echo "${{ steps.meta.outputs.tags }}"
+              echo '```'
+            else
+              echo "- 未推送镜像 (分支构建验证)。发布请在版本 tag (v*.*.*) 上触发或手动输入版本号。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 版本 tag 发布时创建 GitHub Release (镜像在 GHCR)
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          body: |
+            Docker 镜像已发布到 GitHub Container Registry（标签为版本号）：
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
