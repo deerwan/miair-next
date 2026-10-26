@@ -19,6 +19,7 @@ from app.engine.const import (
     TRANSPORT_STATE_TRANSITIONING,
 )
 from app.engine.dlna.eventing import EventManager, build_last_change_event, clamp_timeout
+from app.engine.dlna.duration import probe_duration as probe_audio_duration
 from app.engine.dlna.media_buffer import MediaBuffer
 from app.engine.dlna.cover import (
     default_cover_asset_path,
@@ -41,6 +42,9 @@ log = logging.getLogger("miair")
 
 # 最多同时保留的音频缓冲数（含 seek 缓冲）
 _MAX_BUFFERS = 10
+
+# 时长嗅探: 等待缓冲就绪的最少数据量 (容器头部探测足够)
+_PROBE_MIN_BYTES = 64 * 1024
 
 
 class DeviceServer:
@@ -137,6 +141,7 @@ class DeviceServer:
         renderer.event_manager = em
         renderer.proxy_url_func = self.create_proxy_url
         renderer.seek_url_func = self.create_seek_url
+        renderer.probe_duration_func = self.probe_duration
         renderer.pre_buffer_func = self.start_buffering
         renderer.abort_proxy_func = self.abort_proxy_for_renderer
         renderer.resume_proxy_func = self.resume_proxy_for_renderer
@@ -182,6 +187,31 @@ class DeviceServer:
         url = f"http://{self.hostname}:{self.dlna_port}/media/{token}"
         return url
 
+    async def probe_duration(self, remote_url: str, timeout: float = 20.0) -> float:
+        """从远端 URL 对应的缓冲数据嗅探音频时长（秒），无缓冲或失败返回 0
+
+        元数据缺失 duration 时的兜底：等待预缓冲头部就绪后取容器头部数据
+        探测，无需下载完成。bytearray 并发写入下切片拷贝是原子读，安全。
+        """
+        buffer_id = self._url_to_buffer.get(remote_url)
+        buf = self._media_buffers.get(buffer_id) if buffer_id else None
+        if buf is None or buf.error:
+            return 0.0
+        try:
+            await asyncio.wait_for(buf._headers_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        deadline = time.monotonic() + timeout
+        while not buf.download_complete and not buf.error:
+            if len(buf.data) >= _PROBE_MIN_BYTES or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.25)
+        if buf.error or len(buf.data) == 0:
+            return 0.0
+        # 直接传 bytearray 引用: 截断/拷贝在 probe 内部的线程池执行,
+        # 避免大缓冲 (上限 200MB) 在事件循环里全量拷贝造成阻塞
+        return await probe_audio_duration(buf.data)
+
     async def create_seek_url(
         self, original_url: str, seek_seconds: float, duration: float, udn: str = ""
     ) -> str | None:
@@ -209,11 +239,8 @@ class DeviceServer:
         if buf.total_size <= 0:
             log.warning(f"Seek: 缓冲大小为0")
             return None
-        if duration <= 0 or seek_seconds < 0:
+        if seek_seconds < 0:
             log.warning(f"Seek: 无效的时间参数 {seek_seconds}/{duration}")
-            return None
-        if seek_seconds >= duration:
-            log.warning(f"Seek: 时间超出范围 {seek_seconds}/{duration}")
             return None
 
         # 等待缓冲完成（最多等待15秒）
@@ -227,6 +254,18 @@ class DeviceServer:
                 if len(buf.data) < 2 * 1024 * 1024:
                     log.warning(f"Seek: 缓冲数据不足 ({len(buf.data)} bytes)")
                     return None
+
+        # 元数据缺失 duration 时从缓冲数据嗅探兜底, 避免静默回退软 Seek
+        if duration <= 0:
+            duration = await probe_audio_duration(buf.data)
+            if duration <= 0:
+                log.warning("Seek: 无法确定音轨时长 (元数据缺失且嗅探失败)")
+                return None
+            log.info(f"Seek: 元数据缺失时长, 已从缓冲嗅探: {duration:.1f}s")
+
+        if seek_seconds >= duration:
+            log.warning(f"Seek: 时间超出范围 {seek_seconds}/{duration}")
+            return None
 
         seek_ratio = seek_seconds / duration
         fmt = self._detect_audio_format(buf.data)

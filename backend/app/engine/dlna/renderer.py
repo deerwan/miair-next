@@ -23,6 +23,10 @@ from app.engine.dlna.xmlsafe import safe_fromstring
 
 log = logging.getLogger("miair")
 
+# 元数据与嗅探均无法确定曲长时, 连续播放超过该秒数即模拟自然播完
+# (防止位置计时无上限累加、控制端时间跑飞)
+_UNKNOWN_DURATION_PLAY_LIMIT = 7200.0
+
 
 class DLNARenderer:
     """每个音箱对应一个 DLNA 渲染器实例，管理传输状态"""
@@ -54,6 +58,8 @@ class DLNARenderer:
         self.proxy_url_func = None
         # Seek 代理 URL 生成函数 (由 DeviceServer 注入)
         self.seek_url_func = None
+        # 时长嗅探函数 (由 DeviceServer 注入, 元数据缺失 duration 时兜底)
+        self.probe_duration_func = None
         # 预缓冲函数 (由 DeviceServer 注入，SetAVTransportURI 时提前下载)
         self.pre_buffer_func = None
         # 代理中止回调 (由 DeviceServer 注入，替代双向引用)
@@ -77,6 +83,8 @@ class DLNARenderer:
         
         # 播放状态检查任务
         self._play_check_task: asyncio.Task | None = None
+        # 时长嗅探任务 (元数据缺失 duration 时启动, 切歌/重置时取消)
+        self._duration_probe_task: asyncio.Task | None = None
         # play() 后的宽限期，在此时间之前轮询不覆盖 PLAYING 状态
         self._play_grace_until: float = 0.0
         # 用户主动暂停/停止标志：True 表示用户手动暂停/停止，不应自动续播
@@ -134,11 +142,43 @@ class DLNARenderer:
             self._track_title, self._track_artist = self._parse_track_info(metadata)
             self._track_audio_id = None
             log.info(f"[{self.friendly_name}] SetAVTransportURI: {uri}")
+
+        # 取消上一曲可能仍在进行的时长嗅探
+        if self._duration_probe_task:
+            self._duration_probe_task.cancel()
+            self._duration_probe_task = None
+
+        # 元数据缺失 duration 时, 从预缓冲的音频数据异步嗅探回填 (不阻塞 SOAP 响应)
+        if self._track_duration <= 0 and self.probe_duration_func:
+            self._duration_probe_task = asyncio.get_running_loop().create_task(
+                self._probe_track_duration(uri)
+            )
         # 提前开始缓冲音频（在 Play 之前下载，减少等待）
         if self.pre_buffer_func:
             self.pre_buffer_func(uri)
         await self.notify_state_change()
         return True
+
+    async def _probe_track_duration(self, uri: str):
+        """从缓冲音频数据嗅探曲长并回填 _track_duration (元数据缺失时)"""
+        try:
+            duration = await self.probe_duration_func(uri)
+            if duration <= 0:
+                return
+            async with self._lock:
+                # URI 已切换或已有有效时长 (如新元数据携带) 时丢弃过期结果
+                if self.current_uri != uri or self._track_duration > 0:
+                    return
+                self._track_duration = duration
+            log.info(
+                f"[{self.friendly_name}] 元数据缺失时长, 已从音频数据嗅探回填: "
+                f"{duration:.1f}s"
+            )
+            await self.notify_state_change()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"[{self.friendly_name}] 曲长嗅探失败: {e}")
 
     @staticmethod
     def _parse_track_info(metadata: str) -> tuple[str, str]:
@@ -252,6 +292,16 @@ class DLNARenderer:
                         # 主动触发下一曲
                         asyncio.get_running_loop().create_task(self.next_track())
                         break
+                elif self._track_duration <= 0 and current_position >= _UNKNOWN_DURATION_PLAY_LIMIT:
+                    # 曲长未知 (元数据缺失且嗅探失败) 且已连续播放超过上限:
+                    # 模拟自然播完, 防止位置计时无上限累加导致控制端时间跑飞
+                    log.warning(
+                        f"[{self.friendly_name}] 曲长未知且已连续播放 "
+                        f"{current_position:.0f}s (超过 {_UNKNOWN_DURATION_PLAY_LIMIT:.0f}s 上限), "
+                        "模拟自然播完以重置计时"
+                    )
+                    asyncio.get_running_loop().create_task(self.next_track())
+                    break
                 else:
                     near_end_count = 0
 
@@ -436,6 +486,9 @@ class DLNARenderer:
             if self._play_check_task:
                 self._play_check_task.cancel()
                 self._play_check_task = None
+            if self._duration_probe_task:
+                self._duration_probe_task.cancel()
+                self._duration_probe_task = None
             log.info(f"[{self.friendly_name}] 控制端断开，重置为空闲 ({old_state})")
         await self.notify_state_change()
 
@@ -456,10 +509,22 @@ class DLNARenderer:
                 async with self._lock:
                     duration = self._track_duration
                     current_uri = self.current_uri
-                if duration > 0 and current_uri:
-                    seek_url = await self.seek_url_func(
-                        current_uri, seconds, duration, self.udn
-                    )
+                if current_uri:
+                    if duration <= 0 and self.probe_duration_func:
+                        # 元数据缺失时长: 从缓冲数据嗅探兜底, 避免静默降级软 Seek
+                        duration = await self.probe_duration_func(current_uri)
+                        if duration > 0:
+                            async with self._lock:
+                                if self.current_uri == current_uri and self._track_duration <= 0:
+                                    self._track_duration = duration
+                            log.info(
+                                f"[{self.friendly_name}] Seek: 元数据缺失时长, "
+                                f"已从音频数据嗅探: {duration:.1f}s"
+                            )
+                    if duration > 0:
+                        seek_url = await self.seek_url_func(
+                            current_uri, seconds, duration, self.udn
+                        )
 
             # 然后在锁内修改状态
             async with self._lock:
@@ -482,7 +547,7 @@ class DLNARenderer:
                     success = await self.speaker.play_url(seek_url, self._track_audio_id)
                     if success:
                         self._accumulated_time = seconds
-                        
+
                         # 如果之前是暂停状态，seek后暂停在当前位置
                         if was_paused:
                             await self.speaker.pause()
@@ -492,6 +557,13 @@ class DLNARenderer:
                         else:
                             self._play_start_time = time.time()
                             self.transport_state = TRANSPORT_STATE_PLAYING
+                            # 重启播放状态检查: 轮询任务在上面的 TRANSITIONING
+                            # 阶段已自行退出, 不重启则 seek 后无法自动切歌
+                            if self._play_check_task:
+                                self._play_check_task.cancel()
+                            self._play_check_task = asyncio.create_task(
+                                self._check_play_status()
+                            )
                             log.info(f"[{self.friendly_name}] Seek 成功")
                     else:
                         self.transport_state = TRANSPORT_STATE_STOPPED
@@ -500,11 +572,15 @@ class DLNARenderer:
                     asyncio.get_running_loop().create_task(self.notify_state_change())
                     return success
 
-                # 回退: 软 Seek（仅更新内部位置追踪）
+                # 回退: 软 Seek（仅更新内部位置追踪，音箱播放位置不变）
                 self._accumulated_time = seconds
                 if self.transport_state == TRANSPORT_STATE_PLAYING:
                     self._play_start_time = time.time()
-                log.info(f"[{self.friendly_name}] Seek to {target} (soft)")
+                log.warning(
+                    f"[{self.friendly_name}] Seek to {target} (soft): 无法生成 seek 音频"
+                    f"({'元数据与嗅探均未获得曲长' if self._track_duration <= 0 else '缓冲/转码失败'})，"
+                    "仅更新控制端位置, 音箱不会跳转"
+                )
                 return True
         elif unit == "TRACK_NR":
             log.info(f"[{self.friendly_name}] Seek TRACK_NR={target} (ignored)")
@@ -537,6 +613,15 @@ class DLNARenderer:
                 self.current_uri_metadata
             )
             self._track_audio_id = None
+
+            # 新曲元数据缺失时长时同样嗅探回填
+            if self._track_duration <= 0 and self.probe_duration_func:
+                if self._duration_probe_task:
+                    self._duration_probe_task.cancel()
+                    self._duration_probe_task = None
+                self._duration_probe_task = asyncio.get_running_loop().create_task(
+                    self._probe_track_duration(self.current_uri)
+                )
 
             if self.speaker:
                 play_url = self.current_uri
@@ -718,8 +803,13 @@ class DLNARenderer:
     def _get_elapsed_time(self) -> float:
         """获取当前播放已经过的秒数"""
         if self.transport_state == TRANSPORT_STATE_PLAYING and self._play_start_time > 0:
-            return self._accumulated_time + (time.time() - self._play_start_time)
-        return self._accumulated_time
+            elapsed = self._accumulated_time + (time.time() - self._play_start_time)
+        else:
+            elapsed = self._accumulated_time
+        # 以曲长为上限截断, 防止计时越界 (软 Seek/切歌间隙等场景)
+        if self._track_duration > 0 and elapsed > self._track_duration:
+            return self._track_duration
+        return elapsed
 
     @staticmethod
     def _format_time(seconds: float) -> str:
