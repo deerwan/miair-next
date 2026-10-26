@@ -11,6 +11,9 @@ on:
       - 'docs/**'
       - '.gitignore'
       - 'img/**'
+  # PR 触发: 仅跑 test job (build/release 由 if 守卫跳过), 满足分支保护 required check
+  # 不加 paths-ignore, 确保任何 PR 都产出 test check 供合并门禁判定
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -64,6 +67,8 @@ jobs:
 
   build:
     needs: test
+    # 仅 push (main/tag) 时构建镜像; PR 上只跑 test, 避免重构建浪费
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
