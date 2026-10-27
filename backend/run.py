@@ -13,7 +13,7 @@ REQUIRED_PACKAGES = {
     "fastapi": "fastapi>=0.110.0",
     "uvicorn": "uvicorn>=0.27.0",
     "aiohttp": "aiohttp>=3.9.0",
-    "miservice": "miservice-fork",
+    "miservice": "miservice-fork~=2.9.3",
     "zeroconf": "zeroconf>=0.38.0",
     "Crypto": "pycryptodome>=3.15.0",
     "av": "av>=10.0.0",

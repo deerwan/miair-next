@@ -63,6 +63,11 @@ export async function playUrl(did: string, url: string) {
   return data
 }
 
+export async function stopSpeaker(did: string) {
+  const { data } = await http.post(`/speakers/${did}/stop`)
+  return data
+}
+
 export async function setVolume(did: string, volume: number) {
   const { data } = await http.post(`/speakers/${did}/volume`, { volume })
   return data

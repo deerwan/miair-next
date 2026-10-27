@@ -1339,6 +1339,16 @@ class DeviceServer:
         if renderer.transport_state == new_state:
             return
 
+        # music-api 机型 pause=player_stop: 音箱在暂停期间持续上报 STOPPED,
+        # 而「保持位置」改写会把渲染器维持在 PAUSED。不拦截的话每轮轮询都会
+        # 重复状态改写、日志与 GENA 通知 (refs #18)。已处于保持位置暂停时视为无变化。
+        if (
+            new_state == TRANSPORT_STATE_STOPPED
+            and renderer.transport_state == TRANSPORT_STATE_PAUSED
+            and renderer._stuck_paused_since > 0
+        ):
+            return
+
         old_state = renderer.transport_state
 
         # TRANSITIONING 保护：play()/seek() 正在执行中，轮询结果是过时的，跳过同步

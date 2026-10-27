@@ -120,6 +120,17 @@ async def play_url(
     return {"ok": ok}
 
 
+@router.post("/speakers/{did}/stop")
+async def stop_speaker(
+    did: str,
+    orch: Orchestrator = Depends(get_orchestrator),
+):
+    """停止指定音箱播放"""
+    controller = _get_controller(orch, did)
+    ok = await controller.stop()
+    return {"ok": ok}
+
+
 @router.post("/speakers/{did}/volume")
 async def set_volume(
     did: str,

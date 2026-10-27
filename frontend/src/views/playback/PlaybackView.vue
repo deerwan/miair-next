@@ -16,6 +16,9 @@
             <n-button type="primary" :disabled="!currentDid || !url" :loading="playing" @click="doPlay">
               播放
             </n-button>
+            <n-button type="warning" :disabled="!currentDid" :loading="stopping" @click="doStop">
+              停止
+            </n-button>
           </n-input-group>
         </n-form-item>
         <n-form-item label="音量">
@@ -38,7 +41,7 @@ import {
   NSlider, NInputNumber, useMessage,
 } from 'naive-ui'
 import {
-  fetchSpeakers, playUrl, setVolume, getVolume,
+  fetchSpeakers, playUrl, stopSpeaker, setVolume, getVolume,
   type SpeakerStatus,
 } from '@/api/speakers'
 import ToolbarCard from '@/components/ToolbarCard.vue'
@@ -47,8 +50,10 @@ const message = useMessage()
 const speakers = ref<SpeakerStatus[]>([])
 const loading = ref(false)
 const playing = ref(false)
+const stopping = ref(false)
 const currentDid = ref<string | null>(null)
-const url = ref('')
+// 预设试音链接: 蜻蜓 FM 直播流 (持续播放, 适合验证播放/停止)
+const url = ref('https://lhttp.qtfm.cn/live/4915/64k.mp3')
 const volume = ref(50)
 
 const speakerOptions = computed(() =>
@@ -69,6 +74,19 @@ async function doPlay() {
     message.error(e.response?.data?.detail || '播放失败')
   } finally {
     playing.value = false
+  }
+}
+
+async function doStop() {
+  if (!currentDid.value) return
+  stopping.value = true
+  try {
+    const res = await stopSpeaker(currentDid.value)
+    res.ok ? message.success('已停止') : message.error('停止失败')
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '停止失败')
+  } finally {
+    stopping.value = false
   }
 }
 

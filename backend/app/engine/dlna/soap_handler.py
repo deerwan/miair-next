@@ -81,7 +81,7 @@ async def handle_soap_request(
     Returns:
         (response_xml, http_status_code)
     """
-    log.info(f"[{renderer.friendly_name}] SOAP: {action} params={params}")
+    log.debug(f"[{renderer.friendly_name}] SOAP: {action} params={params}")
 
     if service_urn == AVTRANSPORT_URN:
         return await _handle_avtransport(renderer, action, params)
