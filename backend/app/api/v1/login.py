@@ -115,6 +115,10 @@ async def change_password(
     if not hashed or not verify_password(payload.old_password, hashed):
         raise HTTPException(status_code=400, detail="原密码错误")
     store.update_password(username, hash_password(payload.new_password))
+    # 轮换 JWT 密钥, 立即吊销所有已签发 token (含当前会话)。
+    # 改密本身即为发现凭据泄露后的止损动作, 旧 token 必须即刻失效;
+    # 客户端随后请求将收到 401 并跳转重新登录 (WS 经 4401 分支登出)。
+    get_settings().rotate_secret()
     return {"ok": True}
 
 

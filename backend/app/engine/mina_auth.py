@@ -234,7 +234,7 @@ class MinaAuth:
         headers = {"User-Agent": self.user_agent}
         try:
             async with self._client().request(
-                method, url, data=data, cookies=cookies, headers=headers, ssl=False
+                method, url, data=data, cookies=cookies, headers=headers
             ) as r:
                 text = await r.text()
             return json.loads(_strip_json_prefix(text))
@@ -434,7 +434,7 @@ class MinaAuth:
         )
         try:
             await self._client().get(
-                list_url, headers={"User-Agent": self.user_agent}, ssl=False
+                list_url, headers={"User-Agent": self.user_agent}
             )
         except Exception:
             pass

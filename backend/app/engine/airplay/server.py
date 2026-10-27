@@ -31,6 +31,12 @@ from app.engine.airplay import dxxp
 
 log = logging.getLogger("miair")
 
+# RTSP 解析上限: 无鉴权端点 (mDNS 广播暴露), 恶意客户端发送无结束符的
+# 超长头部或声明超大 Content-Length 可无限占用内存, 必须设上限
+_RTSP_MAX_HEADER_SIZE = 64 * 1024   # 请求头累计上限 64KB
+_RTSP_MAX_BODY_SIZE = 2 * 1024 * 1024  # 请求体上限 2MB (RTSP body 本就极小)
+
+
 
 # ============================================================
 # 核心数据结构
@@ -729,6 +735,9 @@ class AirPlayServer:
                 # 读取 RTSP 请求头
                 data = b""
                 while b"\r\n\r\n" not in data:
+                    if len(data) > _RTSP_MAX_HEADER_SIZE:
+                        log.warning(f"RTSP 请求头超过 {_RTSP_MAX_HEADER_SIZE} bytes, 断开连接: {addr}")
+                        return
                     chunk = sock.recv(4096)
                     if not chunk:
                         log.info(f"AirPlay 客户端关闭连接: {addr}")
@@ -768,7 +777,17 @@ class AirPlayServer:
                         self._client_name = ua.split("/")[0]
 
                 # 如果有 Content-Length，继续读取请求体
-                content_length = int(headers.get("Content-Length", 0))
+                try:
+                    content_length = int(headers.get("Content-Length", 0))
+                except (TypeError, ValueError):
+                    log.warning(f"RTSP 非法 Content-Length, 断开连接: {addr}")
+                    return
+                if content_length > _RTSP_MAX_BODY_SIZE:
+                    log.warning(
+                        f"RTSP 请求体声明 {content_length} bytes 超过上限 "
+                        f"{_RTSP_MAX_BODY_SIZE}, 断开连接: {addr}"
+                    )
+                    return
                 if content_length > 0:
                     while len(body) < content_length:
                         chunk = sock.recv(4096)

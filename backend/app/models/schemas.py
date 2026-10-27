@@ -1,6 +1,8 @@
 """API 请求/响应模型"""
 
-from pydantic import BaseModel, Field
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, field_validator
 
 # ---- 认证 ----
 
@@ -69,7 +71,15 @@ class RenameRequest(BaseModel):
 
 
 class PlayUrlRequest(BaseModel):
-    url: str = Field(min_length=1)
+    url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("url")
+    @classmethod
+    def _require_http_scheme(cls, v: str) -> str:
+        """投送的 URL 最终由音箱/后端拉流, 仅允许 http/https"""
+        if urlparse(v).scheme.lower() not in ("http", "https"):
+            raise ValueError("仅支持 http/https URL")
+        return v
 
 
 class VolumeRequest(BaseModel):

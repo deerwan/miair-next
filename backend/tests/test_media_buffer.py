@@ -47,11 +47,20 @@ class FakeResponse:
 
 
 class FakeSession:
-    """替代 aiohttp.ClientSession: head/get 返回预置响应"""
+    """替代 aiohttp.ClientSession: head/get 返回预置响应
+
+    request() 对齐 net_guard.safe_request 的调用方式
+    (手动重定向逐跳校验, 走 session.request 接口)。
+    """
 
     def __init__(self, head_response=None, get_response=None):
         self._head = head_response
         self._get = get_response
+
+    def request(self, method, url, **kwargs):
+        if method.upper() == "HEAD":
+            return self._aw(self._head)
+        return self._aw(self._get)
 
     def head(self, url, **kwargs):
         return self._ctx(self._head)
@@ -69,6 +78,24 @@ class FakeSession:
         async def __aexit__(self, *args):
             return False
 
+    class _aw:
+        """同时支持 await 与 async with (对齐 aiohttp _RequestContextManager)"""
+
+        def __init__(self, resp):
+            self.resp = resp
+
+        def __await__(self):
+            async def _coro():
+                return self.resp
+
+            return _coro().__await__()
+
+        async def __aenter__(self):
+            return self.resp
+
+        async def __aexit__(self, *args):
+            return False
+
 
 def _run(main):
     return asyncio.run(main)
@@ -77,7 +104,7 @@ def _run(main):
 class TestSizeCap:
     def test_huge_content_length_rejected_before_alloc(self):
         """远端声明 10GB Content-Length → 预分配前被拒, data 保持为空"""
-        buf = MediaBuffer("http://evil.example/song.flac")
+        buf = MediaBuffer("http://192.168.1.99/song.flac")
         session = FakeSession(
             head_response=FakeResponse(
                 status=200,
@@ -98,7 +125,7 @@ class TestSizeCap:
     def test_unbounded_streaming_aborts_midway(self, monkeypatch):
         """无 Content-Length 的无限流: 超过上限时中止, 不标记下载完成"""
         monkeypatch.setattr(media_buffer, "_MAX_DOWNLOAD_SIZE", 3000)
-        buf = MediaBuffer("http://evil.example/stream")
+        buf = MediaBuffer("http://192.168.1.99/stream")
         session = FakeSession(
             head_response=FakeResponse(status=200, headers={}),
             get_response=FakeResponse(
@@ -117,7 +144,7 @@ class TestSizeCap:
 
     def test_normal_download_unaffected(self):
         """正常小文件下载不受上限影响, 完整落盘"""
-        buf = MediaBuffer("http://music.example/song.mp3")
+        buf = MediaBuffer("http://192.168.1.10/song.mp3")
         session = FakeSession(
             head_response=FakeResponse(
                 status=200, headers={"Content-Length": "2048"}
@@ -143,15 +170,15 @@ class TestRangeViolation:
         因此端到端断言: 内存不随全量响应体积增长。
         """
         monkeypatch.setattr(media_buffer, "_MAX_DOWNLOAD_SIZE", 3000)
-        buf = MediaBuffer("http://evil.example/song.flac")
+        buf = MediaBuffer("http://192.168.1.99/song.flac")
         buf.total_size = 6 * 1024 * 1024  # >5MB 触发多线程路径
         buf._supports_range = True
         full_body = b"z" * (6 * 1024 * 1024)
 
         # 每次 GET 返回全新响应 (真实服务器每次都回全量, 不共享读游标)
         class FreshBodySession(FakeSession):
-            def get(self, url, **kwargs):
-                return FakeSession._ctx(
+            def request(self, method, url, **kwargs):
+                return FakeSession._aw(
                     FakeResponse(status=200, content=FakeContent([full_body]))
                 )
 
@@ -170,17 +197,17 @@ class TestRangeViolation:
         """正确支持 Range 的服务器: 分块下载正常完成"""
         total = 6 * 1024 * 1024
         data = bytes(range(256)) * (total // 256)
-        buf = MediaBuffer("http://music.example/song.flac")
+        buf = MediaBuffer("http://192.168.1.10/song.flac")
         buf.total_size = total
         buf._supports_range = True
 
         class RangeAwareSession(FakeSession):
-            def get(self, url, **kwargs):
+            def request(self, method, url, **kwargs):
                 headers = kwargs.get("headers", {})
                 rng = headers.get("Range", "")
                 start = int(rng.split("=")[1].split("-")[0]) if rng else 0
                 end = int(rng.split("=")[1].split("-")[1]) if rng else total - 1
-                return FakeSession._ctx(
+                return FakeSession._aw(
                     FakeResponse(
                         status=206, content=FakeContent([data[start:end + 1]])
                     )

@@ -263,11 +263,15 @@ class MiAccount(_MiserviceMiAccount):
     async def _account_request(
         self, method, url, *, params=None, data=None, cookies=None
     ) -> dict:
-        """account.xiaomi.com 的请求封装: 固定 UA + 忽略自签证书 + 剥离 JSON 前缀"""
+        """account.xiaomi.com 的请求封装: 固定 UA + 剥离 JSON 前缀
+
+        注意: 不禁用 TLS 证书校验 (凭据安全底线), 账号密码/passToken
+        必须经受完整校验的 HTTPS 链路传输。
+        """
         headers = {"User-Agent": self.now_ua}
         async with self.session.request(
             method, url, params=params, data=data, cookies=cookies,
-            headers=headers, ssl=False,
+            headers=headers,
         ) as r:
             raw = await r.read()
         return json.loads(_strip_json_prefix(raw.decode("utf-8", errors="replace")))

@@ -331,7 +331,10 @@ class Config:
 
             tmp_file = self.config_file + ".tmp"
             try:
-                with open(tmp_file, "w", encoding="utf-8") as f:
+                # 0600 创建 (config.json 含明文账号密码/Cookie),
+                # 消除"先 0644 写完再 chmod"的权限窗口; os.replace 后权限随 tmp 保留
+                fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 os.replace(tmp_file, self.config_file)  # 原子替换
             except Exception:

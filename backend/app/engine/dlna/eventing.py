@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 import aiohttp
 from xml.sax.saxutils import escape
 
+from app.engine.net_guard import UnsafeURLError, assert_host_safe
+
 log = logging.getLogger("miair")
 
 # 订阅表上限: 无鉴权端点, 防反复 SUBSCRIBE 堆积 task/内存
@@ -26,12 +28,20 @@ def clamp_timeout(seconds: int) -> int:
 
 
 def validate_callback_url(url: str) -> str | None:
-    """校验 SUBSCRIBE 的 CALLBACK: 仅接受 http(s) URL, 返回规范化值或 None"""
+    """校验 SUBSCRIBE 的 CALLBACK: 仅接受 http(s) 且目标 IP 安全的 URL
+
+    控制点 (BubbleUPnP 等) 位于局域网私网段, 属合法目标不拒绝;
+    拒绝 loopback / link-local / multicast 等 (见 net_guard 模块说明)。
+    """
     url = (url or "").strip().strip("<>").strip()
     if not url or len(url) > _CALLBACK_MAX_LEN:
         return None
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    try:
+        assert_host_safe(parsed.hostname)
+    except UnsafeURLError:
         return None
     return url
 

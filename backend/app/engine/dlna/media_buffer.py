@@ -6,6 +6,8 @@ import threading
 
 import aiohttp
 
+from app.engine.net_guard import safe_request, validate_url_safe
+
 log = logging.getLogger("miair")
 
 # 浏览器 UA，防止远端拒绝
@@ -53,13 +55,18 @@ class MediaBuffer:
     async def _do_download(self, session: aiohttp.ClientSession):
         """执行下载，写入内存 bytearray"""
         try:
+            # SSRF 防护: URL 来自局域网无鉴权面 (SetAVTransportURI / play_url),
+            # 禁止 loopback / link-local 等危险目标 (私网 NAS 媒体源不受影响)
+            await validate_url_safe(self.remote_url)
+
             # 首先尝试获取文件信息
             headers = {"User-Agent": _UA}
-            async with session.head(
+            async with await safe_request(
+                session,
+                "HEAD",
                 self.remote_url,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30, connect=10),
-                allow_redirects=True,
             ) as resp:
                 if resp.status in (200, 206):
                     ct = resp.headers.get("Content-Type")
@@ -118,11 +125,12 @@ class MediaBuffer:
                 "User-Agent": _UA,
                 "Range": "bytes=0-1023"
             }
-            async with session.get(
+            async with await safe_request(
+                session,
+                "GET",
                 self.remote_url,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10, connect=5),
-                allow_redirects=True,
             ) as resp:
                 if resp.status == 206:  # Partial Content
                     return True
@@ -139,11 +147,12 @@ class MediaBuffer:
     async def _do_single_thread_download(self, session: aiohttp.ClientSession):
         """单线程下载"""
         headers = {"User-Agent": _UA}
-        async with session.get(
+        async with await safe_request(
+            session,
+            "GET",
             self.remote_url,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=300, connect=15),
-            allow_redirects=True,
         ) as resp:
             if resp.status not in (200, 206):
                 self.error = f"HTTP {resp.status}"
@@ -191,11 +200,12 @@ class MediaBuffer:
                     "Range": f"bytes={start}-{end}"
                 }
                 try:
-                    async with session.get(
+                    async with await safe_request(
+                        session,
+                        "GET",
                         self.remote_url,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=120, connect=10),
-                        allow_redirects=True,
                     ) as resp:
                         if resp.status not in (200, 206):
                             log.error(f"分块下载失败: HTTP {resp.status}")

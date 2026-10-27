@@ -159,6 +159,35 @@ class TestChangePassword:
         )
         assert resp.status_code == 200
 
+    def test_change_password_revokes_existing_tokens(self):
+        """改密后 JWT 密钥轮换, 已签发 token (含当前会话) 立即失效"""
+        token = _setup_admin().json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 改密前 token 有效
+        resp = client.get("/api/v1/me", headers=headers)
+        assert resp.status_code == 200
+
+        resp = client.post(
+            "/api/v1/login/password",
+            json={"old_password": "pass1234", "new_password": "newpass123"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+        # 改密后旧 token 立即失效 (凭据泄露止损: 不等 24h 过期)
+        resp = client.get("/api/v1/me", headers=headers)
+        assert resp.status_code == 401
+
+        # 新密码可重新登录, 新 token 有效
+        resp = client.post(
+            "/api/v1/login", json={"username": "admin", "password": "newpass123"}
+        )
+        assert resp.status_code == 200
+        new_headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+        resp = client.get("/api/v1/me", headers=new_headers)
+        assert resp.status_code == 200
+
 
 class TestClientIp:
     """_client_ip: 默认忽略反代头 (防伪造), 仅 MIAIR_TRUST_PROXY 开启时才信任"""

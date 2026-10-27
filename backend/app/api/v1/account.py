@@ -86,12 +86,10 @@ def _persist_login(
     }
     if service_token and ssecurity:
         token["micoapi"] = [ssecurity, service_token]
-    with open(token_home, "w") as f:
+    # 0600 创建 (含 passToken/serviceToken), 消除"写完再 chmod"的权限窗口
+    fd = os.open(token_home, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(token, f, indent=2)
-    try:
-        os.chmod(token_home, 0o600)
-    except OSError:
-        pass
 
     config.save()
     log.info("登录凭证已保存, 正在热重启服务...")

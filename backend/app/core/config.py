@@ -46,13 +46,21 @@ class AppSettings:
             if key:
                 return key
         key = secrets.token_hex(32)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(key)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        self._write_secret(path, key)
         return key
+
+    @staticmethod
+    def _write_secret(path: str, key: str) -> None:
+        """以 0600 权限创建并写入密钥文件 (先建后写, 消除全局可读窗口)"""
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key)
+
+    def rotate_secret(self) -> None:
+        """轮换 JWT 密钥: 立即吊销所有已签发 token (修改管理员密码时调用)"""
+        key = secrets.token_hex(32)
+        self._write_secret(os.path.join(self.data_dir, "secret.key"), key)
+        self.secret_key = key
 
 
 @lru_cache
