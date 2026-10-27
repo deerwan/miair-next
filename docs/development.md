@@ -64,7 +64,7 @@ docker build -t miair-next:local .
 
 ## 发版流程
 
-1. 同步修改版本号(两处需一致):`backend/app/__init__.py` 的 `__version__` 与 `backend/pyproject.toml` 的 `version`,提交并推送 `main`
+1. 同步修改版本号(两处需一致):`backend/app/engine/const.py` 的 `VERSION`(`__init__.py` 从此处导出)与 `backend/pyproject.toml` 的 `version`,提交并推送 `main`
 2. 打语义化 tag 并推送:
 
 ```bash
