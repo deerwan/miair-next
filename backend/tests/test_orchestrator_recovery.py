@@ -214,3 +214,88 @@ def test_offline_callback_stops_receiver_and_arms_watch():
 
     asyncio.run(run())
 
+
+def test_visibility_hides_and_shows_speaker():
+    """音箱离线与上线时动态更新 AirPlay/DLNA 注册状态"""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.dlna_running = True
+    orch._offline_speakers = set()
+    orch._did_to_udn = {"did-1": "udn-1"}
+
+    state = {"online": False}
+
+    async def get_status():
+        if not state["online"]:
+            raise RuntimeError("offline")
+        return {"status": 1}
+
+    controller = SimpleNamespace(
+        get_status=get_status,
+        speaker=SimpleNamespace(get_dlna_name=lambda: "Test Speaker"),
+    )
+    orch.speaker_manager = SimpleNamespace(controllers={"did-1": controller})
+
+    class Renderer:
+        reset = 0
+
+        async def reset_to_idle(self):
+            self.reset += 1
+
+    renderer = Renderer()
+    orch.renderers = {"udn-1": renderer}
+
+    class AirPlay:
+        hidden: list[str] = []
+        shown: list[str] = []
+
+        async def hide_speaker(self, did):
+            self.hidden.append(did)
+
+        async def show_speaker(self, did, controller):
+            self.shown.append(did)
+
+    class SSDP:
+        unregistered: list[str] = []
+        registered: list[tuple[str, str]] = []
+        alive: list[str] = []
+
+        async def unregister_renderer(self, udn):
+            self.unregistered.append(udn)
+
+        def register_renderer(self, udn, name):
+            self.registered.append((udn, name))
+
+        async def send_alive_for(self, udn):
+            self.alive.append(udn)
+
+    class Device:
+        unregistered: list[str] = []
+        registered: list[int] = []
+
+        async def unregister_renderer(self, udn):
+            self.unregistered.append(udn)
+
+        def register_renderer(self, renderer):
+            self.registered.append(1)
+
+    orch.airplay_manager = AirPlay()
+    orch.ssdp_server = SSDP()
+    orch.device_server = Device()
+
+    async def run():
+        await orch._refresh_speaker_visibility()
+        assert orch._offline_speakers == {"did-1"}
+        assert orch.airplay_manager.hidden == ["did-1"]
+        assert orch.ssdp_server.unregistered == ["udn-1"]
+        assert orch.device_server.unregistered == ["udn-1"]
+        assert renderer.reset == 1
+
+        state["online"] = True
+        await orch._refresh_speaker_visibility()
+        assert orch._offline_speakers == set()
+        assert orch.airplay_manager.shown == ["did-1"]
+        assert orch.ssdp_server.registered == [("udn-1", "Test Speaker")]
+        assert orch.ssdp_server.alive == ["udn-1"]
+        assert orch.device_server.registered == [1]
+
+    asyncio.run(run())

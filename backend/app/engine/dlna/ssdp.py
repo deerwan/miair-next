@@ -36,6 +36,34 @@ class SSDPServer:
         self.renderers[udn] = friendly_name
         log.info(f"SSDP 注册渲染器: {friendly_name} (uuid:{udn})")
 
+    def _send_alive_for(self, udn: str) -> None:
+        if not self._transport or udn not in self.renderers:
+            return
+        for nt, usn in self._get_search_targets(udn):
+            self._transport.sendto(
+                self._build_notify_alive(nt, usn, udn), (SSDP_ADDR, SSDP_PORT)
+            )
+
+    def _send_byebye_for(self, udn: str) -> None:
+        if not self._transport:
+            return
+        for nt, usn in self._get_search_targets(udn):
+            self._transport.sendto(
+                self._build_notify_byebye(nt, usn), (SSDP_ADDR, SSDP_PORT)
+            )
+
+    async def send_alive_for(self, udn: str) -> None:
+        """为指定渲染器发送 SSDP alive 通告"""
+        self._send_alive_for(udn)
+
+    async def unregister_renderer(self, udn: str) -> None:
+        """发送 byebye 通告并注销指定渲染器"""
+        if udn not in self.renderers:
+            return
+        self._send_byebye_for(udn)
+        name = self.renderers.pop(udn, "")
+        log.info(f"SSDP 注销渲染器: {name} (uuid:{udn})")
+
     def _get_location(self, udn: str) -> str:
         """获取设备描述 URL"""
         return f"http://{self.hostname}:{self.dlna_port}/device/{udn}/description.xml"
@@ -180,9 +208,7 @@ class SSDPServer:
         if not self._transport:
             return
         for udn in self.renderers:
-            for nt, usn in self._get_search_targets(udn):
-                data = self._build_notify_byebye(nt, usn)
-                self._transport.sendto(data, (SSDP_ADDR, SSDP_PORT))
+            self._send_byebye_for(udn)
 
     async def _periodic_alive(self):
         """定期发送 alive 通告"""

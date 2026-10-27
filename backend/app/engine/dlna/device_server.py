@@ -146,6 +146,16 @@ class DeviceServer:
         renderer.abort_proxy_func = self.abort_proxy_for_renderer
         renderer.resume_proxy_func = self.resume_proxy_for_renderer
 
+    async def unregister_renderer(self, udn: str):
+        """注销渲染器并停止事件管理器"""
+        self.renderers.pop(udn, None)
+        em = self.event_managers.pop(udn, None)
+        if em is not None:
+            try:
+                await em.stop()
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"停止 DLNA EventManager 失败: {e}")
+
     # ---- 音频缓冲/代理系统 ----
 
     def start_buffering(self, remote_url: str):

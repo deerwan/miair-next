@@ -154,10 +154,18 @@ class AirPlayMDNS:
             # 二者共用同一 RTSP 端口和 server 名，iOS 仍可走 AirPlay 1 (RAOP) 音频流。
             registered = False
             for attempt in range(3):
+                if not self._running:
+                    return
                 try:
                     self.zeroconf.register_service(self.airplay_info, allow_name_change=True)
+                    if not self._running:
+                        self._unregister_infos()
+                        return
                     log.info(f"AirPlay 服务已注册: {self.device_name}._airplay._tcp.local.")
                     self.zeroconf.register_service(self.raop_info, allow_name_change=True)
+                    if not self._running:
+                        self._unregister_infos()
+                        return
                     log.info(f"RAOP 服务已注册: {device_id_clean}@{self.device_name}._raop._tcp.local.")
                     registered = True
                     break
@@ -175,6 +183,9 @@ class AirPlayMDNS:
             if not registered:
                 log.error(f"mDNS 服务注册失败: {self.device_name}")
                 return
+            if not self._running:
+                self._unregister_infos()
+                return
 
             log.info(f"AirPlay 音频接收器 mDNS 广播已启动")
             log.info(f"  设备名称: {self.device_name}")
@@ -190,17 +201,26 @@ class AirPlayMDNS:
             import traceback
             log.error(traceback.format_exc())
 
+    def _unregister_infos(self):
+        """注销 mDNS 广播服务记录"""
+        if not self.zeroconf:
+            return
+        for info in (self.airplay_info, self.raop_info):
+            if not info:
+                continue
+            try:
+                if not self.zeroconf.loop.is_closed():
+                    self.zeroconf.unregister_service(info)
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"注销 mDNS 服务失败: {e}")
+
     def stop(self):
         """停止 mDNS 广播"""
         self._running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+        self._unregister_infos()
         if self.zeroconf:
-            for info in (self.airplay_info, self.raop_info):
-                if info:
-                    try:
-                        if self.zeroconf and not self.zeroconf.loop.is_closed():
-                            self.zeroconf.unregister_service(info)
-                    except Exception as e:
-                        log.error(f"注销 mDNS 服务失败: {e}")
             log.info(f"AirPlay 服务已注销: {self.device_name}")
         # 注意：不关闭共享的 zeroconf，只关闭自己创建的
         if self.zeroconf and not self.shared_zeroconf:
@@ -208,8 +228,6 @@ class AirPlayMDNS:
                 self.zeroconf.close()
             except Exception:
                 pass
-        if self._thread:
-            self._thread.join(timeout=2)
 
     def _get_ip(self) -> str:
         """获取本机 IP 地址"""

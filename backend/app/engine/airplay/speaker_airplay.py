@@ -443,29 +443,43 @@ class AirPlayManager:
         self.speaker_airplays: dict[str, SpeakerAirPlay] = {}  # did -> SpeakerAirPlay
         self._shared_zeroconf: Zeroconf | None = None
 
-    async def start_for_speakers(self, controllers: dict[str, SpeakerController]):
-        """为所有音箱启动 AirPlay 服务"""
-        # 创建一个共享的 Zeroconf 实例
+    def _ensure_shared_zeroconf(self) -> Zeroconf:
+        """获取或创建共享 Zeroconf 实例"""
         if not self._shared_zeroconf:
             self._shared_zeroconf = Zeroconf(ip_version=IPVersion.All)
             log.info("创建共享 Zeroconf 实例用于所有音箱")
+        return self._shared_zeroconf
 
+    async def start_for_speakers(self, controllers: dict[str, SpeakerController]):
+        """为所有音箱启动 AirPlay 服务"""
+        self._ensure_shared_zeroconf()
         for did, controller in controllers.items():
-            if did in self.speaker_airplays:
-                # 已经存在，跳过
-                continue
-
-            try:
-                speaker_airplay = SpeakerAirPlay(
-                    self.hostname, controller, self._shared_zeroconf,
-                    config=self.config
-                )
-                await speaker_airplay.start()
-                self.speaker_airplays[did] = speaker_airplay
-            except Exception as e:
-                log.error(f"为音箱 {controller.speaker.get_dlna_name()} 启动 AirPlay 失败: {e}")
-
+            await self.show_speaker(did, controller)
         log.info(f"共启动了 {len(self.speaker_airplays)} 个音箱的 AirPlay 服务")
+
+    async def hide_speaker(self, did: str) -> None:
+        """停止并移除指定音箱的 AirPlay 服务"""
+        speaker_airplay = self.speaker_airplays.pop(did, None)
+        if speaker_airplay is None:
+            return
+        try:
+            await speaker_airplay.stop()
+        except Exception as e:  # noqa: BLE001
+            log.error(f"隐藏音箱 AirPlay 失败: {e}")
+
+    async def show_speaker(self, did: str, controller: SpeakerController) -> None:
+        """创建并启动指定音箱的 AirPlay 服务"""
+        if did in self.speaker_airplays:
+            return
+        zeroconf = self._ensure_shared_zeroconf()
+        try:
+            speaker_airplay = SpeakerAirPlay(
+                self.hostname, controller, zeroconf, config=self.config
+            )
+            await speaker_airplay.start()
+            self.speaker_airplays[did] = speaker_airplay
+        except Exception as e:  # noqa: BLE001
+            log.error(f"为音箱 {controller.speaker.get_dlna_name()} 启动 AirPlay 失败: {e}")
 
     async def stop(self):
         """停止所有 AirPlay 服务"""

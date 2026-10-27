@@ -670,7 +670,8 @@ class AirPlayServer:
         self._running = False
         if self._rtsp_socket:
             self._rtsp_socket.close()
-        self._mdns.stop()
+        # 在工作线程中执行 mDNS 注销，避免阻塞事件循环
+        await asyncio.to_thread(self._mdns.stop)
         await self._stream_server.stop()
         log.info("AirPlay 服务已停止")
 

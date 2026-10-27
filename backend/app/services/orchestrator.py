@@ -26,6 +26,8 @@ log = logging.getLogger("miair")
 # 失败而「复用缓存 serviceToken」持续成功, 无节流会形成 重启→登录失败→复用→
 # 再重启 的死循环, 并以每秒数次频率请求小米接口 (2026-09-06 生产事故)。
 RECOVERY_RESTART_MIN_INTERVAL = 60
+# 音箱在线状态巡检间隔 (秒)
+SPEAKER_VISIBILITY_CHECK_SECONDS = 15
 
 
 class Orchestrator:
@@ -47,6 +49,8 @@ class Orchestrator:
         self.spotify_target_offline = False
         self.spotify_offline_reason = ""
         self._spotify_watch_task: asyncio.Task | None = None
+        self._visibility_task: asyncio.Task | None = None
+        self._offline_speakers: set[str] = set()
         self._device_check_task: asyncio.Task | None = None
         # 重启串行化: 防止连续扫码/保存设置触发多个 restart 并发互相踩踏
         self._restart_lock = asyncio.Lock()
@@ -217,6 +221,9 @@ class Orchestrator:
 
             await self._start_spotify()
 
+            await self._refresh_speaker_visibility()
+            self._start_visibility_monitor()
+
             log.info(f"MiAir Next 服务启动完成! 共 {len(self.renderers)} 个音箱")
             log.info("手机 DLNA / AirPlay 现在应该能发现这些设备了")
 
@@ -383,8 +390,82 @@ class Orchestrator:
             # _start_dlna_services 内部已重启 AirPlay (先停旧再启新), 无需再次重启
             await self._start_dlna_services()
 
+    def _start_visibility_monitor(self) -> None:
+        """启动音箱在线状态巡检任务"""
+        if not self.speaker_manager or not self.speaker_manager.controllers:
+            return
+        task = self._visibility_task
+        if task is not None and not task.done():
+            return
+        self._visibility_task = asyncio.create_task(self._monitor_speaker_visibility())
+
+    async def _monitor_speaker_visibility(self) -> None:
+        """周期巡检音箱在线状态"""
+        try:
+            while self.dlna_running:
+                await asyncio.sleep(SPEAKER_VISIBILITY_CHECK_SECONDS)
+                await self._refresh_speaker_visibility()
+        except asyncio.CancelledError:
+            pass
+
+    async def _refresh_speaker_visibility(self) -> None:
+        """巡检所有音箱在线状态并更新服务可见性"""
+        if not self.dlna_running or not self.speaker_manager:
+            return
+        for did, controller in list(self.speaker_manager.controllers.items()):
+            try:
+                await asyncio.wait_for(controller.get_status(), timeout=10)
+                online = True
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"设备在线巡检失败 did={did}: {e}")
+                online = False
+            if online and did in self._offline_speakers:
+                await self._show_speaker_services(did, controller)
+                self._offline_speakers.discard(did)
+            elif not online and did not in self._offline_speakers:
+                await self._hide_speaker_services(did, controller)
+                self._offline_speakers.add(did)
+
+    async def _hide_speaker_services(self, did: str, controller) -> None:
+        """隐藏离线音箱的 AirPlay 与 DLNA 服务"""
+        name = controller.speaker.get_dlna_name()
+        udn = self._did_to_udn.get(did)
+        if self.airplay_manager:
+            await self.airplay_manager.hide_speaker(did)
+        if udn:
+            renderer = self.renderers.get(udn)
+            if renderer:
+                try:
+                    await renderer.reset_to_idle()
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"重置 DLNA 渲染器失败: {e}")
+            if self.ssdp_server:
+                await self.ssdp_server.unregister_renderer(udn)
+            if self.device_server:
+                await self.device_server.unregister_renderer(udn)
+        log.warning(f"设备离线, 已隐藏 AirPlay/DLNA: {name}")
+
+    async def _show_speaker_services(self, did: str, controller) -> None:
+        """恢复上线音箱的 AirPlay 与 DLNA 服务"""
+        name = controller.speaker.get_dlna_name()
+        udn = self._did_to_udn.get(did)
+        if udn:
+            renderer = self.renderers.get(udn)
+            if renderer and self.device_server:
+                self.device_server.register_renderer(renderer)
+            if self.ssdp_server:
+                self.ssdp_server.register_renderer(udn, name)
+                await self.ssdp_server.send_alive_for(udn)
+        if self.airplay_manager:
+            await self.airplay_manager.show_speaker(did, controller)
+        log.info(f"设备已上线, 恢复 AirPlay/DLNA: {name}")
+
     async def _stop_dlna_services(self):
         """停止 DLNA 服务"""
+        if self._visibility_task:
+            self._visibility_task.cancel()
+            self._visibility_task = None
+        self._offline_speakers.clear()
         if self.ssdp_server:
             await self.ssdp_server.stop()
             self.ssdp_server = None
