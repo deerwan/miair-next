@@ -5,6 +5,7 @@ export interface SpotifySpeakerStatus {
   configured: boolean
   is_target: boolean
   active: boolean
+  offline: boolean
   running: boolean
   paired: boolean
   playback: 'idle' | 'playing' | 'paused' | 'buffering' | string

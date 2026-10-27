@@ -10,6 +10,7 @@ import asyncio
 import io
 import os
 import tarfile
+import time
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -251,10 +252,434 @@ class _FakeConfig:
     hostname = "127.0.0.1"
 
 
-def _make_receiver(controller=None):
+def _make_receiver(controller=None, config=None):
     from app.engine.spotify.receiver import SpotifyReceiver
 
-    return SpotifyReceiver(_FakeConfig(), controller or _FakeController(), "127.0.0.1")
+    return SpotifyReceiver(config or _FakeConfig(), controller or _FakeController(), "127.0.0.1")
+
+
+class TestInterruptBehaviour:
+    """Spotify 播放打断与自动恢复联动测试"""
+
+    def test_pause_when_auto_resume_off(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            await receiver._pause_after_interrupt()
+
+            assert receiver._ws.sent == [("pause", {})], "应下发 Soloist pause 指令"
+            assert receiver._playback_status == "paused"
+            assert receiver._last_cluster_status == "paused"
+            assert controller.stopped == 1, "暂停后应停止音箱推流"
+            assert receiver._speaker_active is False
+            assert receiver._poll_task is None
+
+        asyncio.run(scenario())
+
+    def test_pause_send_failure_still_stops_speaker(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs(ok=False)
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            await receiver._pause_after_interrupt()
+
+            assert receiver._ws.sent == [("pause", {}), ("pause", {})], "失败后应重试一次"
+            assert receiver._playback_status == "playing", "未确认暂停时不应伪造暂停状态"
+            assert controller.stopped == 1
+            assert receiver._speaker_active is False
+
+        asyncio.run(scenario())
+
+    def test_pause_retries_after_ws_reconnect(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs(fail_times=1)
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            await receiver._pause_after_interrupt()
+
+            assert receiver._ws.sent == [("pause", {}), ("pause", {})]
+            assert receiver._playback_status == "paused"
+            assert controller.stopped == 1
+
+        asyncio.run(scenario())
+
+    def test_pause_skipped_when_not_active_device(self):
+        """播放设备转移时不暂停 Spotify"""
+        controller = _FakeController()
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = False
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            await receiver._pause_after_interrupt()
+
+            assert receiver._ws.sent == [], "非活动设备不应下发 pause"
+            assert controller.stopped == 0
+            assert receiver._speaker_active is True
+
+        asyncio.run(scenario())
+
+    def test_resume_replays_stream_when_auto_resume_on(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = True
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            receiver._stream_url = "http://127.0.0.1:9/spotify/stream.wav"
+            await receiver._resume_after_interrupt()
+
+            assert controller.played, "应重新向音箱推流"
+            assert "sid=" in controller.played[0]
+            assert receiver._ws.sent == [], "开启自动恢复时不应暂停 Spotify"
+
+        asyncio.run(scenario())
+
+    def test_poll_resumes_when_auto_resume_on(self, monkeypatch):
+        from app.engine.spotify import receiver as receiver_mod
+
+        monkeypatch.setattr(receiver_mod, "INTERRUPT_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(receiver_mod, "PLAY_GRACE_SECONDS", 0.0)
+
+        controller = _FakeController()
+        state = {"status": 0}
+
+        async def get_status():
+            return {"status": state["status"]}
+
+        controller.get_status = get_status
+        controller._on_play = lambda: state.__setitem__("status", 1)
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = True
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            try:
+                receiver._is_active = True
+                receiver._paired = True
+                receiver._speaker_active = True
+                receiver._playback_status = "playing"
+                receiver._stream_url = "http://127.0.0.1:9/spotify/stream.wav"
+                receiver._stream._client_count = 1
+                receiver._poll_task = asyncio.create_task(receiver._poll_interrupts())
+                for _ in range(200):
+                    await asyncio.sleep(0.01)
+                    if controller.played:
+                        break
+                assert len(controller.played) == 1, "应恰好重新推流一次"
+                assert not any(cmd == "pause" for cmd, _ in receiver._ws.sent)
+            finally:
+                # 取消残留任务
+                for task in asyncio.all_tasks():
+                    if task is not asyncio.current_task():
+                        task.cancel()
+                await asyncio.sleep(0)
+
+        asyncio.run(scenario())
+
+    def test_poll_pauses_on_interrupt_when_disabled(self, monkeypatch):
+        from app.engine.spotify import receiver as receiver_mod
+
+        monkeypatch.setattr(receiver_mod, "INTERRUPT_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(receiver_mod, "PLAY_GRACE_SECONDS", 0.0)
+
+        controller = _FakeController()
+
+        async def interrupted():
+            return {"status": 0}
+
+        controller.get_status = interrupted
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            receiver._stream._client_count = 1
+            receiver._poll_task = asyncio.create_task(receiver._poll_interrupts())
+            for _ in range(300):
+                await asyncio.sleep(0.01)
+                if not receiver._speaker_active:
+                    break
+            pauses = [c for c in receiver._ws.sent if c[0] == "pause"]
+            assert pauses == [("pause", {})]
+            assert receiver._speaker_active is False
+            assert controller.stopped == 1
+            await asyncio.sleep(0.05)
+            assert receiver._poll_task is None
+
+        asyncio.run(scenario())
+
+    def test_poll_pauses_when_stream_client_lost(self, monkeypatch):
+        """音箱断流且未开启自动恢复时暂停 Spotify"""
+        from app.engine.spotify import receiver as receiver_mod
+
+        monkeypatch.setattr(receiver_mod, "INTERRUPT_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(receiver_mod, "PLAY_GRACE_SECONDS", 0.0)
+
+        controller = _FakeController()
+
+        async def still_playing():
+            return {"status": 1}
+
+        controller.get_status = still_playing
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            receiver._stream._client_count = 0
+            receiver._poll_task = asyncio.create_task(receiver._poll_interrupts())
+            for _ in range(300):
+                await asyncio.sleep(0.01)
+                if not receiver._speaker_active:
+                    break
+            pauses = [c for c in receiver._ws.sent if c[0] == "pause"]
+            assert pauses == [("pause", {})], "断开拉流应立即暂停 Spotify"
+            assert receiver._speaker_active is False
+            assert controller.stopped == 1
+            assert receiver._stream._active is False
+            await asyncio.sleep(0.05)
+
+        asyncio.run(scenario())
+
+    def test_poll_resumes_on_stream_lost_when_auto_resume_on(self, monkeypatch):
+        """音箱断流且开启自动恢复时重新推流"""
+        from app.engine.spotify import receiver as receiver_mod
+
+        monkeypatch.setattr(receiver_mod, "INTERRUPT_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(receiver_mod, "PLAY_GRACE_SECONDS", 0.0)
+
+        controller = _FakeController()
+
+        async def still_playing():
+            return {"status": 1}
+
+        controller.get_status = still_playing
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = True
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            try:
+                receiver._is_active = True
+                receiver._paired = True
+                receiver._speaker_active = True
+                receiver._playback_status = "playing"
+                receiver._stream_url = "http://127.0.0.1:9/spotify/stream.wav"
+                receiver._stream._client_count = 0
+                receiver._poll_task = asyncio.create_task(receiver._poll_interrupts())
+                for _ in range(300):
+                    await asyncio.sleep(0.01)
+                    if controller.played:
+                        break
+                assert controller.played, "设置开启时断流应按设置重新推流"
+                assert not any(cmd == "pause" for cmd, _ in receiver._ws.sent)
+            finally:
+                for task in asyncio.all_tasks():
+                    if task is not asyncio.current_task():
+                        task.cancel()
+                await asyncio.sleep(0)
+
+        asyncio.run(scenario())
+
+    def test_interrupt_check_seconds_follows_resume_delay(self):
+        config = _FakeConfig()
+        config.resume_delay_seconds = 7
+        receiver = _make_receiver(config=config)
+        assert receiver._interrupt_check_seconds() == 7.0
+
+    def test_grace_period_suppresses_false_interrupt(self, monkeypatch):
+        from app.engine.spotify import receiver as receiver_mod
+
+        monkeypatch.setattr(receiver_mod, "INTERRUPT_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(receiver_mod, "PLAY_GRACE_SECONDS", 1.0)
+
+        controller = _FakeController()
+
+        async def interrupted():
+            return {"status": 0}
+
+        controller.get_status = interrupted
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        config.resume_delay_seconds = 0.01
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._is_active = True
+            receiver._paired = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            receiver._stream._client_count = 1
+            receiver._last_push_at = time.time()
+            receiver._poll_task = asyncio.create_task(receiver._poll_interrupts())
+            await asyncio.sleep(0.1)
+            assert not any(c[0] == "pause" for c in receiver._ws.sent), "宽限期内不应误判"
+            assert receiver._speaker_active is True
+
+            receiver._last_push_at = 0.0
+            for _ in range(200):
+                await asyncio.sleep(0.01)
+                if not receiver._speaker_active:
+                    break
+            assert any(c[0] == "pause" for c in receiver._ws.sent)
+            await asyncio.sleep(0.05)
+
+        asyncio.run(scenario())
+
+    def test_interrupt_poll_always_starts(self):
+        config = _FakeConfig()
+        config.auto_resume_on_interrupt = False
+        receiver = _make_receiver(config=config)
+
+        async def scenario():
+            receiver._start_interrupt_poll()
+            assert receiver._poll_task is not None, "关闭自动恢复时也必须轮询以检测打断"
+            receiver._cancel_interrupt_poll()
+            assert receiver._poll_task is None
+
+        asyncio.run(scenario())
+
+
+class TestSpeakerOnline:
+    def test_offline_releases_active_state_and_does_not_auto_activate(self):
+        controller = _FakeController()
+
+        async def offline():
+            raise RuntimeError("device offline")
+
+        controller.get_status = offline
+        config = _FakeConfig()
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+        offline_calls: list[int] = []
+
+        async def on_offline():
+            offline_calls.append(1)
+
+        receiver.on_target_offline = on_offline
+
+        async def scenario():
+            receiver._running = True
+            receiver._is_active = True
+            receiver._speaker_active = True
+            receiver._playback_status = "playing"
+            for _ in range(3):
+                await receiver._check_speaker_online()
+            await asyncio.sleep(0.05)
+            assert offline_calls == [1], "离线后应通知 Orchestrator 停止 Soloist"
+            assert receiver._speaker_offline is True
+            assert receiver._is_active is False
+            assert receiver._playback_status == "idle"
+            assert receiver._speaker_active is False
+            assert controller.stopped == 1
+            assert receiver.status()["offline"] is True
+            assert ("pause", {}) in receiver._ws.sent
+            assert ("deactivate", {}) in receiver._ws.sent
+
+            async def online():
+                return {"status": 1}
+
+            controller.get_status = online
+            await receiver._check_speaker_online()
+            assert receiver._speaker_offline is False
+            assert receiver.status()["offline"] is False
+            assert receiver._is_active is False, "恢复在线不能主动成为活动设备"
+            assert controller.played == []
+
+        asyncio.run(scenario())
+
+    def test_offline_ignores_soloist_active_events(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._speaker_offline = True
+            receiver._is_active = False
+            await receiver._on_ws_event(
+                {
+                    "type": "auth_state",
+                    "logged_in": True,
+                    "is_active": True,
+                    "device_name": "Test Speaker",
+                }
+            )
+            assert receiver._is_active is False, "离线时不能重新置为 active"
+            await receiver._handle_active_changed(True)
+            assert receiver._is_active is False, "离线时忽略 Soloist 活动设备信号"
+
+        asyncio.run(scenario())
+
+    def test_push_blocked_while_speaker_offline(self):
+        controller = _FakeController()
+        config = _FakeConfig()
+        receiver = _make_receiver(controller, config)
+        receiver._ws = _FakeWs()
+
+        async def scenario():
+            receiver._running = True
+            receiver._is_active = True
+            receiver._speaker_offline = True
+            receiver._speaker_active = False
+            receiver._playback_status = "playing"
+            receiver._request_play()
+            await asyncio.sleep(0.05)
+            assert receiver._play_task is None
+            await receiver._do_play()
+            assert controller.played == []
+
+        asyncio.run(scenario())
 
 
 class TestReceiverRecovery:
@@ -474,12 +899,19 @@ class _FakePulse:
 
 
 class _FakeWs:
-    def __init__(self):
+    def __init__(self, ok: bool = True, fail_times: int = 0):
         self.sent: list[tuple[str, dict]] = []
+        self.ok = ok
+        self.fail_times = fail_times
+        self.connected = asyncio.Event()
+        self.connected.set()
 
     async def send(self, command: str, **fields) -> bool:
         self.sent.append((command, fields))
-        return True
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            return False
+        return self.ok
 
     async def stop(self) -> None:
         return None

@@ -28,6 +28,7 @@ export interface SpotifyStatus {
   running: boolean
   paired: boolean
   active: boolean
+  offline: boolean
   device_name: string
   target_did: string
   target_name: string

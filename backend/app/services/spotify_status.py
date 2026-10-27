@@ -13,6 +13,7 @@ def collect_spotify_speaker_status(orchestrator, did: str) -> dict:
         "configured": configured,
         "is_target": False,
         "active": False,
+        "offline": False,
         "running": False,
         "paired": False,
         "playback": "idle",
@@ -29,6 +30,7 @@ def collect_spotify_speaker_status(orchestrator, did: str) -> dict:
         # 接收器未运行时依据配置判断目标音箱
         target_did = (getattr(config, "spotify_did", "") or "").strip()
         info["is_target"] = bool(target_did) and did == target_did
+        info["offline"] = bool(getattr(orchestrator, "spotify_target_offline", False))
         return info
 
     status = receiver.status()
@@ -37,6 +39,7 @@ def collect_spotify_speaker_status(orchestrator, did: str) -> dict:
         {
             "is_target": did == status.get("target_did"),
             "active": bool(status.get("active", status.get("is_active", False))),
+            "offline": bool(status.get("offline", False)),
             "running": bool(status.get("running")),
             "paired": bool(status.get("paired")),
             "playback": status.get("playback") or "idle",

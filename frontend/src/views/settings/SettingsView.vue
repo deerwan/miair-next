@@ -98,6 +98,9 @@
               <n-text strong>运行状态</n-text>
               <n-button size="tiny" :loading="spotifyLoading" @click="loadSpotifyStatus">刷新</n-button>
             </n-space>
+            <n-alert v-if="spotifyStatus?.offline" type="error" :show-icon="true" style="margin-top: 8px">
+              目标音箱当前离线：已请求暂停 Spotify 并解除活动设备状态，请检查音箱电源/网络。
+            </n-alert>
             <n-alert v-if="spotifyStatus?.last_error" type="error" :show-icon="true" style="margin-top: 8px">
               {{ spotifyStatus.last_error }}
             </n-alert>
@@ -117,6 +120,11 @@
               </n-descriptions-item>
               <n-descriptions-item label="设备名">{{ spotifyStatus.device_name || '-' }}</n-descriptions-item>
               <n-descriptions-item label="目标音箱">{{ spotifyStatus.target_name || '-' }}</n-descriptions-item>
+              <n-descriptions-item label="音箱状态">
+                <n-tag :type="spotifyStatus.offline ? 'error' : 'success'" size="small">
+                  {{ spotifyStatus.offline ? '离线' : '在线' }}
+                </n-tag>
+              </n-descriptions-item>
               <n-descriptions-item label="Soloist 版本">
                 <span v-if="spotifyStatus.binary.installed">v{{ spotifyStatus.binary.version }}</span>
                 <n-tag v-else size="small" type="warning">未安装</n-tag>

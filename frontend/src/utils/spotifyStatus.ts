@@ -11,6 +11,7 @@ export function spotifyTag(s?: SpotifySpeakerStatus | null): SpotifyTagInfo {
   if (!s.enabled) return { type: 'default', text: 'Spotify: 未启用' }
   if (!s.configured) return { type: 'warning', text: 'Spotify: 未配置 Key' }
   if (!s.is_target) return { type: 'default', text: 'Spotify: 未绑定' }
+  if (s.offline) return { type: 'error', text: 'Spotify: 设备离线' }
   if (!s.running) {
     return { type: s.last_error ? 'error' : 'warning', text: 'Spotify: 未运行' }
   }
@@ -26,7 +27,7 @@ export function spotifyTag(s?: SpotifySpeakerStatus | null): SpotifyTagInfo {
 
 /** 提取当前播放曲目文本摘要 */
 export function spotifyTrackText(s?: SpotifySpeakerStatus | null): string {
-  if (!s || !s.is_target || !s.running || !s.paired || !s.active) return ''
+  if (!s || !s.is_target || !s.running || !s.paired || !s.active || s.offline) return ''
   const t = s.track
   if (!t || !t.title) return ''
   return t.artist ? `${t.title} — ${t.artist}` : t.title

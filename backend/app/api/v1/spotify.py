@@ -40,6 +40,7 @@ async def _status_payload(config, orchestrator: Orchestrator) -> dict:
             "running": False,
             "paired": False,
             "active": False,
+            "offline": bool(getattr(orchestrator, "spotify_target_offline", False)),
             "device_name": (config.spotify_device_name or "").strip(),
             "target_did": config.spotify_did or "",
             "target_name": _target_name(config),
@@ -72,6 +73,11 @@ async def _status_payload(config, orchestrator: Orchestrator) -> dict:
             reasons.append("等待小米账号登录与可用音箱后自动启动")
         if reasons and not data.get("last_error"):
             data["idle_reason"] = "; ".join(reasons)
+    if data.get("offline") and not data.get("last_error"):
+        data["idle_reason"] = (
+            getattr(orchestrator, "spotify_offline_reason", "")
+            or "目标音箱离线, 等待上线后启动 Spotify"
+        )
     return data
 
 

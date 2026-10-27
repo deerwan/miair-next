@@ -23,6 +23,10 @@ log = logging.getLogger("miair")
 STOP_DEBOUNCE_SECONDS = 3.0
 PLAY_GRACE_SECONDS = 10.0
 INTERRUPT_POLL_SECONDS = 5.0
+# 音箱离线连续失败判定阈值
+SPEAKER_OFFLINE_FAILURES = 3
+# 音箱在线检查轮询周期倍率
+SPEAKER_ONLINE_CHECK_TICKS = 1
 
 
 def _free_port() -> int:
@@ -65,6 +69,11 @@ class SpotifyReceiver:
         self._volume_boosted = False
         self._audio_id = ""
         self._speaker_active = False
+        self._speaker_offline = False
+        self._speaker_status_failures = 0
+        self._online_check_tick = 0
+        self.on_target_offline = None
+        self._last_push_at = 0.0
         self._stream_url = ""
         self._ws_port = 0
         self._last_error = ""
@@ -97,6 +106,7 @@ class SpotifyReceiver:
             "running": self._running,
             "paired": self._paired,
             "active": self._is_active,
+            "offline": self._speaker_offline,
             "device_name": self.device_name,
             "target_did": self.speaker.did,
             "target_name": self.speaker.get_dlna_name(),
@@ -282,7 +292,11 @@ class SpotifyReceiver:
         self._stream.write_pcm(chunk)
 
     async def _do_play(self) -> None:
-        if not self._is_active or self._playback_status not in ("playing", "buffering"):
+        if (
+            not self._is_active
+            or self._speaker_offline
+            or self._playback_status not in ("playing", "buffering")
+        ):
             return
         async with self._play_lock:
             if not self._running or self._speaker_active:
@@ -302,6 +316,7 @@ class SpotifyReceiver:
                 log.warning("Spotify 音频推送到音箱失败, 等待状态轮询重试")
                 return
             self._speaker_active = True
+            self._last_push_at = time.time()
             self._audio_id = audio_id
             log.info(
                 f"Spotify 开始在 {self.speaker.get_dlna_name()!r} 播放: "
@@ -322,18 +337,21 @@ class SpotifyReceiver:
     async def _stop_speaker(self) -> None:
         self._cancel_interrupt_poll()
         if not self._speaker_active:
+            await self._restore_idle_volume()
             return
         self._speaker_active = False
         try:
             await self.controller.stop()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:  # noqa: BLE001
             log.warning(f"停止音箱失败: {e}")
-        try:
-            self._stream.stop_streaming()
-        except Exception:  # noqa: BLE001
-            pass
-        # 停止推流后恢复初始硬件音量
-        await self._restore_idle_volume()
+        finally:
+            try:
+                self._stream.stop_streaming()
+            except Exception:  # noqa: BLE001
+                pass
+            await self._restore_idle_volume()
 
     async def _restore_idle_volume(self) -> None:
         """将音箱硬件音量还原为配置的默认音量"""
@@ -344,8 +362,11 @@ class SpotifyReceiver:
         if volume <= 0:
             return
         try:
-            await self.controller.set_volume(max(1, min(100, volume)))
-            log.info(f"Spotify 停止播放, 音箱音量已恢复默认: {volume}%")
+            ok = await self.controller.set_volume(max(1, min(100, volume)))
+            if ok:
+                log.info(f"Spotify 停止播放, 音箱音量已恢复默认: {volume}%")
+            else:
+                log.warning("恢复默认音量失败: 设备无响应")
         except Exception as e:  # noqa: BLE001
             log.warning(f"恢复默认音量失败: {e}")
 
@@ -398,7 +419,7 @@ class SpotifyReceiver:
         if event_type == "auth_state":
             prev_active = self._is_active
             self._paired = bool(data.get("logged_in"))
-            self._is_active = bool(data.get("is_active"))
+            self._is_active = bool(data.get("is_active")) and not self._speaker_offline
             if (
                 self._paired != bool(data.get("logged_in"))
                 or self._is_active != bool(data.get("is_active"))
@@ -428,7 +449,7 @@ class SpotifyReceiver:
                     asyncio.create_task(self._ws.send("get_state"))
         elif event_type == "playback_state":
             # 仅在收到确切激活信号时置为活动状态，避免历史状态覆盖
-            if data.get("is_active") is True:
+            if data.get("is_active") is True and not self._speaker_offline:
                 self._is_active = True
             await self._apply_playback(
                 data.get("status"), data.get("item"), data.get("volume")
@@ -447,8 +468,8 @@ class SpotifyReceiver:
             is_active = data.get("is_active")
             if isinstance(is_active, bool):
                 prev_active = self._is_active
-                self._is_active = is_active
-                if not is_active:
+                self._is_active = is_active and not self._speaker_offline
+                if not self._is_active:
                     self._playback_status = "idle"
                     if self._speaker_active:
                         log.info("Spotify 活动设备已变更, 停止向音箱推流")
@@ -498,7 +519,7 @@ class SpotifyReceiver:
             self._schedule_lyrics_refresh()
 
     def _request_play(self) -> None:
-        if not self._is_active:
+        if not self._is_active or self._speaker_offline:
             return
         if self._stop_task is not None and not self._stop_task.done():
             self._stop_task.cancel()
@@ -542,49 +563,135 @@ class SpotifyReceiver:
             f"Spotify 触屏歌词切换: {(self._track or {}).get('title', '')} "
             f"→ audioID={audio_id}"
         )
-        await self.controller.play_url(url, audio_id)
+        ok = await self.controller.play_url(url, audio_id)
+        if ok:
+            self._last_push_at = time.time()
 
     def _start_interrupt_poll(self) -> None:
-        if not getattr(self.config, "auto_resume_on_interrupt", False):
-            return
+        """启动推流中断检测轮询"""
         self._cancel_interrupt_poll()
         self._poll_task = asyncio.create_task(self._poll_interrupts())
 
     def _cancel_interrupt_poll(self) -> None:
-        if self._poll_task is not None and not self._poll_task.done():
-            self._poll_task.cancel()
+        task = self._poll_task
         self._poll_task = None
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _poll_interrupts(self) -> None:
-        grace_until = time.time() + PLAY_GRACE_SECONDS
         try:
             while self._speaker_active and self._playback_status in ("playing", "buffering"):
                 await asyncio.sleep(INTERRUPT_POLL_SECONDS)
-                if time.time() < grace_until:
+                # 推流宽限期内跳过打断检测
+                if time.time() - self._last_push_at < PLAY_GRACE_SECONDS:
                     continue
                 if not self._speaker_active:
                     return
-                try:
-                    state = await asyncio.wait_for(self.controller.get_status(), timeout=10)
-                except Exception:  # noqa: BLE001
+                # 优先检测拉流断开，其次采样云端播放状态
+                interrupted = await self._probe_stream_lost()
+                if not interrupted:
+                    interrupted = await self._probe_interrupted()
+                if not interrupted:
                     continue
-                if state.get("status") == 1:
-                    continue
-                log.info("Spotify 检测到音箱播放被打断, 准备自动续播")
-                delay = int(getattr(self.config, "resume_delay_seconds", 5) or 5)
-                await asyncio.sleep(delay)
-                if not self._speaker_active or self._playback_status not in (
-                    "playing",
-                    "buffering",
-                ):
+                if not self._is_active or not self._paired:
+                    log.info("Spotify 已不是活动设备, 停止本地推流")
+                    await self._stop_speaker()
                     return
-                url = _fresh_stream_url(self._stream_url)
-                self._stream_url = url
-                ok = await self.controller.play_url(url, self._audio_id or None)
-                log.info(f"Spotify 自动续播{'成功' if ok else '失败'}")
-                grace_until = time.time() + PLAY_GRACE_SECONDS
+                if getattr(self.config, "auto_resume_on_interrupt", False):
+                    await self._resume_after_interrupt()
+                else:
+                    await self._pause_after_interrupt()
+                    return
         except asyncio.CancelledError:
-            pass
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.error(f"Spotify 打断轮询异常退出: {e}")
+
+    def _interrupt_check_seconds(self) -> float:
+        """获取中断确认等待时长 (秒)"""
+        return float(getattr(self.config, "resume_delay_seconds", 5) or 5)
+
+    async def _probe_stream_lost(self) -> bool:
+        """检测音箱拉流连接是否已断开"""
+        if self._stream.has_clients:
+            return False
+        log.info("Spotify 检测到音箱停止拉流, 确认是否被打断 ...")
+        await asyncio.sleep(self._interrupt_check_seconds())
+        return not self._stream.has_clients
+
+    async def _probe_interrupted(self) -> bool:
+        """采样音箱状态检测是否被打断"""
+        for attempt in range(2):
+            try:
+                state = await asyncio.wait_for(self.controller.get_status(), timeout=10)
+            except Exception:  # noqa: BLE001
+                return False
+            if int(state.get("status") or 0) == 1:
+                return False
+            if attempt == 0:
+                if self._ws is not None:
+                    await self._ws.send("get_auth_state")
+                await asyncio.sleep(self._interrupt_check_seconds())
+        return True
+
+    async def _resume_after_interrupt(self) -> None:
+        """打断后自动重新推流"""
+        log.info("Spotify 检测到音箱播放被打断, 准备自动续播")
+        if (
+            not self._is_active
+            or self._speaker_offline
+            or not self._speaker_active
+            or self._playback_status not in ("playing", "buffering")
+        ):
+            return
+        url = _fresh_stream_url(self._stream_url)
+        self._stream_url = url
+        try:
+            ok = await self.controller.play_url(url, self._audio_id or None)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Spotify 自动续播失败: {e}")
+            ok = False
+        self._last_push_at = time.time()
+        log.info(f"Spotify 自动续播{'成功' if ok else '失败'}")
+
+    async def _send_pause(self) -> bool:
+        """向 Soloist 下发暂停指令"""
+        ws = self._ws
+        if ws is None:
+            return False
+        for attempt in range(2):
+            if await ws.send("pause"):
+                return True
+            if attempt == 0:
+                try:
+                    await asyncio.wait_for(ws.connected.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    return False
+        return False
+
+    async def _pause_after_interrupt(self) -> None:
+        """打断后自动暂停 Spotify 播放并停止音箱推流"""
+        if not self._is_active or not self._paired:
+            return
+        log.info("Spotify 检测到音箱播放被打断, 自动暂停 Spotify 播放")
+        prev_status = self._playback_status
+        paused = await self._send_pause()
+        if not paused:
+            log.error("Spotify 自动暂停失败 (WS 未连接或发送失败), 停止音箱推流")
+        self._poll_task = None
+        async with self._play_lock:
+            await self._stop_speaker()
+        if paused:
+            pending_play = self._play_task is not None and not self._play_task.done()
+            if pending_play or (
+                self._playback_status in ("playing", "buffering")
+                and self._playback_status != prev_status
+            ):
+                log.info("Spotify 暂停期间已恢复播放, 重新推流")
+                self._request_play()
+            else:
+                self._last_cluster_status = "paused"
+                self._playback_status = "paused"
 
     def _on_soloist_active_changed(self, active: bool) -> None:
         """响应 Soloist 进程日志中的活动设备变更信号"""
@@ -597,10 +704,68 @@ class SpotifyReceiver:
                 await asyncio.sleep(5)
                 if self._ws is not None:
                     await self._ws.send("get_auth_state")
+                self._online_check_tick += 1
+                if self._online_check_tick >= SPEAKER_ONLINE_CHECK_TICKS:
+                    self._online_check_tick = 0
+                    await self._check_speaker_online()
         except asyncio.CancelledError:
             pass
 
+    async def _check_speaker_online(self) -> None:
+        """检查音箱在线状态并同步更新活动状态"""
+        try:
+            await asyncio.wait_for(self.controller.get_status(), timeout=10)
+        except Exception as e:  # noqa: BLE001
+            self._speaker_status_failures += 1
+            log.debug(
+                f"Spotify 音箱在线检查失败 "
+                f"({self._speaker_status_failures}/{SPEAKER_OFFLINE_FAILURES}): {e}"
+            )
+            if self._speaker_status_failures < SPEAKER_OFFLINE_FAILURES:
+                return
+            self._speaker_status_failures = 0
+            if self._speaker_offline:
+                return
+            self._speaker_offline = True
+            log.warning(f"音箱离线, 解除 Spotify 活动设备状态: {e}")
+            if self._ws is not None:
+                paused = await self._ws.send("pause")
+                deactivated = await self._ws.send("deactivate")
+                log.info(
+                    f"音箱离线: 已请求 Spotify pause={paused}, deactivate={deactivated}"
+                )
+            self._is_active = False
+            self._playback_status = "idle"
+            self._last_cluster_status = "idle"
+            if self._speaker_active:
+                await self._stop_speaker()
+            if self.on_target_offline is not None:
+                asyncio.create_task(self._notify_target_offline())
+            return
+        self._speaker_status_failures = 0
+        if self._speaker_offline:
+            self._speaker_offline = False
+            log.info("音箱已恢复在线, 不主动成为活动设备, 等待用户重新选择")
+            if self._is_active and self._last_cluster_status in ("playing", "buffering"):
+                self._playback_status = self._last_cluster_status
+                self._request_play()
+
+    async def _notify_target_offline(self) -> None:
+        """触发目标音箱离线回调"""
+        cb = self.on_target_offline
+        if cb is None:
+            return
+        try:
+            await cb()
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"通知目标音箱离线失败: {e}")
+
     async def _handle_active_changed(self, active: bool) -> None:
+        if self._speaker_offline:
+            self._is_active = False
+            if active:
+                log.info("音箱离线, 忽略 Soloist 活动设备信号")
+            return
         if active == self._is_active:
             return
         self._is_active = active
