@@ -2,7 +2,7 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=0.9.1
+PKG_VERSION:=0.10.0
 PKG_RELEASE:=20261029
 META_TITLE:=MiAir Next
 META_TITLE.en:=MiAir Next

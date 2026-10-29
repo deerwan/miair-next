@@ -27,7 +27,7 @@ body:
     attributes:
       label: 版本
       description: Web 后台「系统设置」页显示的应用版本
-      placeholder: v0.9.1
+      placeholder: v0.10.0
     validations:
       required: true
 

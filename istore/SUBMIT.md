@@ -42,7 +42,7 @@ cp -r /path/to/miair-next/istore/luci-app-miair-next/* package/luci-app-miair-ne
 ./scripts/feeds update -a && ./scripts/feeds install -a
 make menuconfig        # 勾选 LuCI -> Applications -> luci-app-miair-next
 make package/luci-app-miair-next/compile V=s
-# 产物：bin/packages/<架构>/luci/luci-app-miair-next_0.9.1-1_all.ipk
+# 产物：bin/packages/<架构>/luci/luci-app-miair-next_0.10.0-1_all.ipk
 # 翻译包：bin/packages/<架构>/luci/luci-i18n-miair-next-zh-cn_*.ipk
 ```
 
@@ -55,7 +55,7 @@ make package/luci-app-miair-next/compile V=s
 git clone https://github.com/<你>/istore-repo
 cd istore-repo
 # istore-repo 只收 aarch64 和 x86_64 两类顶层架构目录（cortex-a53/generic 均归到 aarch64/ 下），文件名须带版本号
-cp /path/to/luci-app-miair-next_0.9.1-1_all.ipk bin/packages/aarch64/
+cp /path/to/luci-app-miair-next_0.10.0-1_all.ipk bin/packages/aarch64/
 cp /path/to/luci-i18n-miair-next-zh-cn_*.ipk   bin/packages/aarch64/
 git add bin/packages/aarch64
 git commit -m "feat: add luci-app-miair-next ipk"

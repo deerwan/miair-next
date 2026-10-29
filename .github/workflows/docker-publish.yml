@@ -177,7 +177,7 @@ jobs:
         with:
           generate_release_notes: true
           body: |
-            Docker 镜像已发布到 Docker Hub (版本标签为去掉 v 前缀的语义化版本号, 如 v0.9.1 -> 0.9.1):
+            Docker 镜像已发布到 Docker Hub (版本标签为去掉 v 前缀的语义化版本号, 如 v0.10.0 -> 0.10.0):
 
             ```bash
             docker pull ${{ env.IMAGE_NAME }}:latest

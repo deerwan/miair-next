@@ -72,11 +72,11 @@ docker build -t miair-next:local .
 2. 打语义化 tag 并推送:
 
 ```bash
-git tag v0.9.1
-git push origin v0.9.1
+git tag v0.10.0
+git push origin v0.10.0
 ```
 
-CI 自动完成:构建推送 Docker 镜像(`latest` / `0.9.1` / `0.9` / `<sha>`)+ 创建 GitHub Release(供「检查更新」检测)。
+CI 自动完成:构建推送 Docker 镜像(`latest` / `0.10.0` / `0.10` / `<sha>`)+ 创建 GitHub Release(供「检查更新」检测)。
 
 ## 项目结构
 
