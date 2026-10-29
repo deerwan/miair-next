@@ -31,8 +31,8 @@ class TestLossGate:
 
 
 def _make_stream(maxsize: int = 5) -> AudioStreamServer:
-    """绕过 __init__ 直接构造最小可用的 AudioStreamServer"""
-    s = object.__new__(AudioStreamServer)
+    """Construct the stream normally, with a small queue for overflow tests."""
+    s = AudioStreamServer("127.0.0.1")
     s._active = True
     s._audio_queue = queue.Queue(maxsize=maxsize)
     s._last_drop_log = 0.0

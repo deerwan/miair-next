@@ -32,6 +32,8 @@ MiAir Next 让小米小爱音箱化身 **DLNA 渲染器**、**AirPlay 接收器*
 
 > 完整功能清单详见 [功能特性文档](docs/features.md)。
 
+标准镜像已内置 AirPlay 2 组件，按原有流程安装或更新后，可在服务设置中为一个音箱启用 AirPlay 2（实验性）；其他音箱继续使用 AirPlay 1。参阅[配置和限制](docs/deployment-airplay2.md)。声学同步尚未验证。
+
 ---
 
 # 3. 🚀 快速开始（Docker，推荐）

@@ -41,6 +41,13 @@ export async function fetchSpeakers(): Promise<SpeakerStatus[]> {
   return data
 }
 
+export async function fetchAirplayArtwork(did: string, artworkId: string, signal: AbortSignal): Promise<Blob> {
+  const { data } = await http.get(`/speakers/${encodeURIComponent(did)}/airplay/artwork/${encodeURIComponent(artworkId)}`, {
+    responseType: 'blob', signal,
+  })
+  return data
+}
+
 export async function fetchCloudDevices(): Promise<{ devices: CloudDevice[]; error?: string }> {
   const { data } = await http.get('/devices')
   return data

@@ -11,7 +11,7 @@ on:
       - 'docs/**'
       - '.gitignore'
       - 'img/**'
-  # PR 触发: 仅跑 test job (build/release 由 if 守卫跳过), 满足分支保护 required check
+  # PR 触发: 跑测试和不发布的镜像构建; 发布任务由 if 守卫跳过
   # 不加 paths-ignore, 确保任何 PR 都产出 test check 供合并门禁判定
   pull_request:
   workflow_dispatch:
@@ -47,6 +47,7 @@ jobs:
         run: |
           pip install -e ".[dev]"
           ruff check .
+          ruff check app/engine/airplay/shairport_server.py app/engine/airplay/timed_audio.py
 
       - name: Backend tests (pytest)
         working-directory: backend
@@ -66,8 +67,8 @@ jobs:
           npm run build
 
   build:
-    needs: test
-    # 仅 push (main/tag) 时构建镜像; PR 上只跑 test, 避免重构建浪费
+    needs: [test, image-check]
+    # main/tag publish the same complete image; PR builds never publish.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -93,26 +94,30 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            # main 分支 -> edge (尝鲜/测试)
+            # main updates the tag used by the existing install/update flow.
             type=edge,branch=main
             # 短 SHA (便于回滚定位)
             type=sha,prefix=,format=short
             # 语义化版本标签 (仅打 tag 时): v1.2.3 -> 1.2.3 / 1.2 / latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
+          target: default
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=standard-amd64
+            type=gha,scope=standard-arm64
+            type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
 
       # 同步 README 到 Docker Hub 镜像页 (仅 main 分支推送时)
       # 需要 Read/Write/Delete 权限的 Access Token; 同步失败不阻塞流水线
@@ -124,6 +129,39 @@ jobs:
           username: mrdeer1997
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE_NAME }}
+
+  # Verify both architectures before merging and before publishing main/tags.
+  image-check:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: default
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          load: true
+          tags: miair-next:pr-check
+          cache-from: type=gha,scope=standard-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=standard-${{ matrix.arch }}
+
+      - name: Verify standard installation and AirPlay 2 lifecycle
+        run: |
+          docker run --rm -i --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+            -e PYTHONPATH=/app/backend \
+            miair-next:pr-check python - < backend/tests/fixtures/airplay2_container_smoke.py
 
   # 打 tag 时: 镜像构建成功后自动创建 GitHub Release
   # (「检查更新」端点读取 Releases API, 必须有 Release 才能被检测到)

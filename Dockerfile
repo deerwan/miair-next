@@ -1,7 +1,66 @@
+# syntax=docker/dockerfile:1
+
 ARG NODE_IMAGE=node:20-alpine
 ARG PYTHON_IMAGE=python:3.12-slim-trixie
 
-FROM ${NODE_IMAGE} AS frontend
+# ---------- 阶段 0: 构建 AirPlay 2 组件 ----------
+FROM debian:trixie-slim AS airplay2-build
+
+ARG SHAIRPORT_SYNC_VERSION=5.5.2
+ARG NQPTP_VERSION=1.2.8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
+    build-essential \
+    ca-certificates \
+    git \
+    libavahi-client-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libconfig-dev \
+    libgcrypt20-dev \
+    libplist-dev \
+    libplist-utils \
+    libpopt-dev \
+    libsodium-dev \
+    libsoxr-dev \
+    libssl-dev \
+    libswresample-dev \
+    libtool \
+    pkg-config \
+    uuid-dev \
+    xxd \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --depth 1 --branch "${NQPTP_VERSION}" https://github.com/mikebrady/nqptp.git \
+    && cd nqptp \
+    && autoreconf -fi \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install DESTDIR=/out
+
+COPY backend/native/shairport-sync/ /miair-native/
+RUN git clone --depth 1 --branch "${SHAIRPORT_SYNC_VERSION}" https://github.com/mikebrady/shairport-sync.git \
+    && cd shairport-sync \
+    && git apply --check /miair-native/stdout-timing.patch \
+    && git apply /miair-native/stdout-timing.patch \
+    && cp /miair-native/miair_stdout.h . \
+    && autoreconf -fi \
+    && ./configure --prefix=/usr/local \
+       --with-airplay-2 \
+       --with-avahi \
+       --with-soxr \
+       --with-ssl=openssl \
+       --with-stdout \
+       --with-metadata-pipe \
+    && make -j"$(nproc)" \
+    && make install DESTDIR=/out
+
+# Static assets are architecture-independent; build them on the builder's CPU.
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend
 ARG NPM_REGISTRY=
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -11,7 +70,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Soloist 二进制依赖 glibc >= 2.38 (Debian trixie)
-FROM ${PYTHON_IMAGE}
+FROM ${PYTHON_IMAGE} AS runtime
 ARG PIP_INDEX_URL=https://pypi.org/simple
 
 LABEL org.opencontainers.image.title="MiAir Next"
@@ -67,3 +126,28 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('MIAIR_WEB_PORT', '8300') + '/api/v1/health', timeout=4)"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh", "python", "run.py"]
+
+# Keep the named target for existing source-build deployments.
+FROM runtime AS airplay2
+LABEL org.opencontainers.image.licenses="GPL-3.0-or-later AND GPL-2.0-only"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    avahi-daemon dbus libavahi-client3 libconfig11 libgcrypt20 libplist-2.0-4 \
+    libpopt0 libsodium23 libsoxr0 libssl3t64 libuuid1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=airplay2-build /out/usr/local/bin/shairport-sync /usr/local/bin/shairport-sync
+COPY --from=airplay2-build /out/usr/local/bin/nqptp /usr/local/bin/nqptp
+# NQPTP is GPL-2.0-only; ship its corresponding source alongside the binary.
+COPY --from=airplay2-build /src/nqptp /usr/src/nqptp
+COPY --from=airplay2-build /src/shairport-sync/COPYING /usr/share/doc/shairport-sync/COPYING
+COPY --from=airplay2-build /src/shairport-sync/LICENSES /usr/share/doc/shairport-sync/LICENSES
+COPY --from=airplay2-build /miair-native /usr/share/doc/shairport-sync/miair-native
+# NQPTP is launched by the unprivileged backend and needs only the PTP ports.
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/nqptp \
+    && shairport-sync -V && nqptp -V
+ENV MIAIR_AIRPLAY2_TIMED_STDOUT=1
+ENTRYPOINT ["/bin/sh", "scripts/entrypoint.sh"]
+CMD ["python", "run.py"]
+
+# Standard installs and releases include both receiver implementations.
+# Protocol selection remains in the saved per-speaker settings.
+FROM airplay2 AS default

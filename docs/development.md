@@ -64,6 +64,10 @@ docker build -t miair-next:local .
 
 ## 发版流程
 
+推送到 `main` 后，CI 先检查后端和前端，再构建并运行 `linux/amd64`、`linux/arm64` 的标准镜像，验证非 root 后端启动和原生 AirPlay 2 元数据 / 进程清理。全部通过后发布 `latest` / `edge` / `<sha>`，原有安装、更新流程会获得包含 AirPlay 2 组件的标准镜像。PR 执行同样的检查，但不发布镜像。
+
+正式版本和后台「检查更新」通知仍通过语义化 tag / GitHub Release 发布：
+
 1. 同步修改所有发布渠道的应用版本号为同一 SemVer:后端 `backend/app/engine/const.py`、`backend/pyproject.toml`,前端 `frontend/package.json` 与 lockfile、FNOS `fnos/manifest`、iStore 的 `PKG_VERSION`。提交并推送 `main`
 2. 打语义化 tag 并推送:
 

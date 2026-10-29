@@ -14,6 +14,13 @@ export interface Settings {
   engine_version: string
   hostname: string
   dlna_port: number
+  airplay_mode: 'airplay1' | 'airplay2'
+  airplay2_target_did: string
+  airplay2_port: number
+  airplay2_output_latency_ms: number
+  airplay2_available: boolean
+  airplay2_running: boolean
+  airplay2_error: string
   auto_play_on_set_uri: boolean
   mi_did: string
   has_account: boolean
@@ -59,6 +66,10 @@ export interface SystemStatus {
   renderers_count: number
   hostname: string
   dlna_port: number
+  airplay_mode: 'airplay1' | 'airplay2'
+  airplay2_available: boolean
+  airplay2_running: boolean
+  airplay2_error: string
   has_account: boolean
   logged_in: boolean
   /** serviceToken 剩余有效期 (小时), 负数=已过期; null=未知 */

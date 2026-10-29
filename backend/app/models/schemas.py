@@ -1,5 +1,6 @@
 """API 请求/响应模型"""
 
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -70,6 +71,10 @@ class SettingsPayload(BaseModel):
     cookie: str | None = None
     mi_did: str | None = None
     dlna_port: int | None = Field(default=None, ge=1, le=65535)
+    airplay_mode: Literal["airplay1", "airplay2"] | None = None
+    airplay2_target_did: str | None = None
+    airplay2_port: int | None = Field(default=None, ge=1, le=65535)
+    airplay2_output_latency_ms: int | None = Field(default=None, ge=0, le=4000)
     auto_play_on_set_uri: bool | None = None
     auto_resume_on_interrupt: bool | None = None
     resume_delay_seconds: int | None = Field(default=None, ge=1, le=15)

@@ -85,6 +85,7 @@
 | GET | `/api/v1/speakers/{did}/volume` | 查询音量 |
 | POST | `/api/v1/speakers/{did}/volume` | 设置音量(0-100) |
 | GET | `/api/v1/speakers/{did}/status` | 查询播放状态 |
+| GET | `/api/v1/speakers/{did}/airplay/artwork/{artwork_id}` | Current AirPlay 2 JPEG/PNG artwork; Bearer authentication required, 404 when absent, replaced, or inactive. `artwork_id` comes from WebSocket `now_playing`. |
 
 > **Web 面板不提供「暂停」接口**。DLNA 控制点(App)的暂停由协议层直接处理 —— 走 SOAP `AVTransport/Pause`,内部会中止媒体代理连接使音箱停止拉流,再经小米云下发暂停。Web 面板只暴露播放/停止,这是有意的产品裁剪(见提交 `9e0ed7e`「移除无用暂停停止接口及相关前端调用」),不是缺失。
 
@@ -115,7 +116,7 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `/api/v1/ws?token=<JWT>` | 实时推送音箱状态(每 3 秒)与运行日志 |
+| `/api/v1/ws?token=<JWT>` | 实时推送音箱状态(每 3 秒,含 AirPlay 音频诊断)与运行日志；AirPlay 2 提供桥接格式、队列和拉流连接指标，省略不可获取的原生 RTP/解码计数 |
 
 token 失效时服务端主动以 `4401` 关闭连接;前端收到 `4401` 后停止重连并跳转登录页。每 60 秒复验一次 token,过期即断开。
 

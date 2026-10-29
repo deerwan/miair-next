@@ -10,6 +10,8 @@ export interface NowPlaying {
   title: string
   artist: string
   client: string
+  album?: string
+  artwork_id?: string
 }
 
 export interface StatusMessage {
@@ -22,6 +24,26 @@ export interface StatusMessage {
     transport_state: string
     current_uri: string
     airplay_active: boolean
+    airplay_audio?: {
+      protocol?: 'airplay1' | 'airplay2'
+      playing: boolean
+      sample_rate: number
+      channels: number
+      rtp_packets_received?: number
+      rtp_queue_drops?: number
+      decode_success?: number
+      decode_errors?: number
+      decode_empty_packets?: number
+      decrypt_failures?: number
+      lost_frames_filled?: number
+      pcm_bytes?: number
+      last_rtp_packet_age_seconds?: number | null
+      last_decode_error?: string
+      rtp_queue_depth?: number
+      stream_clients: number
+      stream_queue_depth: number
+      stream_pending_dropped_bytes: number
+    } | null
     now_playing?: NowPlaying
     spotify?: SpotifySpeakerStatus
   }[]

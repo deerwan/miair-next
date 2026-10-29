@@ -38,6 +38,14 @@ async def get_settings_api(
         "engine_version": ENGINE_VERSION,
         "hostname": config.hostname,
         "dlna_port": config.dlna_port,
+        "airplay_mode": config.airplay_mode,
+        "airplay2_target_did": config.airplay2_target_did
+        or (orch.airplay_manager.airplay2_target_did if orch.airplay_manager else ""),
+        "airplay2_port": config.airplay2_port,
+        "airplay2_output_latency_ms": config.airplay2_output_latency_ms,
+        "airplay2_available": orch.airplay2_available,
+        "airplay2_running": orch.airplay2_running,
+        "airplay2_error": orch.airplay2_error,
         "auto_play_on_set_uri": config.auto_play_on_set_uri,
         "mi_did": config.mi_did,
         "has_account": bool(config.account or config.cookie),
@@ -102,6 +110,14 @@ async def save_settings_api(
         config.mi_did = payload.mi_did
     if payload.dlna_port is not None:
         config.dlna_port = payload.dlna_port
+    if payload.airplay_mode is not None:
+        config.airplay_mode = payload.airplay_mode
+    if payload.airplay2_target_did is not None:
+        config.airplay2_target_did = payload.airplay2_target_did.strip()
+    if payload.airplay2_port is not None:
+        config.airplay2_port = payload.airplay2_port
+    if payload.airplay2_output_latency_ms is not None:
+        config.airplay2_output_latency_ms = payload.airplay2_output_latency_ms
     if payload.auto_play_on_set_uri is not None:
         config.auto_play_on_set_uri = payload.auto_play_on_set_uri
     if payload.auto_resume_on_interrupt is not None:

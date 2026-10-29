@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from app.api.deps import get_engine_config, get_orchestrator
 from app.core.masking import mask_devices
@@ -66,6 +67,21 @@ async def list_speakers(orch: Orchestrator = Depends(get_orchestrator)):
             "spotify": collect_spotify_speaker_status(orch, did),
         })
     return speakers_info
+
+
+@router.get("/speakers/{did}/airplay/artwork/{artwork_id}")
+async def airplay_artwork(did: str, artwork_id: str,
+                          orch: Orchestrator = Depends(get_orchestrator)):
+    """Return only the current receiver's in-memory raster artwork (JWT required)."""
+    manager = orch.airplay_manager
+    sap = manager.speaker_airplays.get(did) if manager else None
+    server = sap.airplay_server if sap else None
+    artwork = getattr(server, "artwork", None) if server and server.is_playing else None
+    if not artwork or artwork[0] != artwork_id:
+        raise HTTPException(status_code=404, detail="Artwork unavailable")
+    return Response(content=artwork[2], media_type=artwork[1], headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
 
 
 def _get_controller(orch: Orchestrator, did: str):

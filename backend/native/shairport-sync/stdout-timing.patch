@@ -1,0 +1,35 @@
+diff --git a/audio_stdout.c b/audio_stdout.c
+--- a/audio_stdout.c
++++ b/audio_stdout.c
+@@ -36,6 +36,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
++#include "miair_stdout.h"
+
+ static int fd = STDOUT_FILENO;
+ static int warned = 0;
+@@ -46,7 +47,8 @@
+   char errorstring[1024];
+   if (bytes_per_frame == 0)
+     debug(1, "stdout: bytes per frame not initialised before play()!");
+-  int rc = write(fd, buf, samples * bytes_per_frame);
++  int rc = miair_stdout_write(buf, samples, sample_type, timestamp, playtime,
++                              bytes_per_frame);
+   if ((rc < 0) && (warned == 0)) {
+     strerror_r(errno, (char *)errorstring, 1024);
+     warn("error %d writing to stdout (fd: %d): \"%s\".", errno, fd, errorstring);
+@@ -96,10 +98,10 @@
+                              .deinit = NULL,
+                              .get_configuration = &get_configuration,
+                              .configure = &configure,
+-                             .start = NULL,
+-                             .stop = NULL,
++                             .start = &miair_stdout_start,
++                             .stop = &miair_stdout_boundary,
+                              .is_running = NULL,
+-                             .flush = NULL,
++                             .flush = &miair_stdout_boundary,
+                              .delay = NULL,
+                              .stats = NULL,
+                              .play = &play,

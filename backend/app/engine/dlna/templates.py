@@ -462,8 +462,6 @@ AVTRANSPORT_SCPD = """<?xml version="1.0" encoding="utf-8"?>
       <allowedValueList>
         <allowedValue>NORMAL</allowedValue>
         <allowedValue>REPEAT_ONE</allowedValue>
-        <allowedValue>REPEAT_ALL</allowedValue>
-        <allowedValue>SHUFFLE</allowedValue>
       </allowedValueList>
     </stateVariable>
     <stateVariable sendEvents="no">

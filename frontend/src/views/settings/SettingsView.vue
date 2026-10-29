@@ -27,17 +27,72 @@
 
           <n-tab-pane name="service" tab="服务与网络">
             <n-form :label-placement="labelPlacement" :label-width="labelWidth" :show-feedback="false" style="margin-top: 8px">
-              <n-space vertical :size="18">
+              <n-flex vertical :size="18">
                 <n-form-item label="DLNA 端口">
                   <n-input-number v-model:value="form.dlna_port" :min="1" :max="65535" />
                 </n-form-item>
                 <n-alert v-if="dlnaPortHint" type="warning" :show-icon="true" style="margin: -12px 0 8px">
                   {{ dlnaPortHint }}
                 </n-alert>
+                <n-form-item label="AirPlay">
+                  <div class="airplay-settings">
+                    <div class="airplay-toggle">
+                      <n-switch
+                        v-model:value="form.airplay_mode"
+                        checked-value="airplay2" unchecked-value="airplay1"
+                        aria-labelledby="airplay2-enable-label"
+                      />
+                      <span id="airplay2-enable-label">为一个音箱启用 AirPlay 2（实验性）</span>
+                    </div>
+                    <n-text depth="3" class="airplay-hint">
+                      {{ form.airplay_mode === 'airplay2' ? '仅所选音箱使用 AirPlay 2，其他已启用的音箱均使用 AirPlay 1。' : '所有已启用的音箱均使用 AirPlay 1。' }}
+                    </n-text>
+                    <template v-if="form.airplay_mode === 'airplay2'">
+                      <n-select
+                        :value="form.airplay2_target_did || null"
+                        :options="airplayTargetOptions"
+                        :disabled="!airplayTargetOptions.length"
+                        :placeholder="airplayTargetOptions.length ? '选择使用 AirPlay 2 的音箱' : '暂无已启用的音箱'"
+                        aria-label="AirPlay 2 音箱"
+                        style="max-width: 400px"
+                        @update:value="form.airplay2_target_did = $event ?? ''"
+                      />
+                      <n-text v-if="!airplayTargetOptions.length" depth="3" class="airplay-hint">
+                        请先在<router-link :to="{ name: 'account' }">账号配置</router-link>中选择音箱。
+                      </n-text>
+                      <n-alert :type="airplay2Alert.type" :show-icon="true" :bordered="false">
+                        {{ airplay2Alert.message }}
+                      </n-alert>
+                      <details class="airplay-advanced">
+                        <summary>高级选项</summary>
+                        <div class="airplay-settings">
+                          <n-input-number
+                            v-model:value="form.airplay2_port" :min="1" :max="65535"
+                            :input-props="{ 'aria-label': 'AirPlay 2 端口' }"
+                            style="width: 214px; max-width: 100%"
+                          >
+                            <template #prefix>端口</template>
+                          </n-input-number>
+                          <n-text depth="3" class="airplay-hint">
+                            封面和曲目信息取决于发送端。触屏歌词需匹配到小米曲库中的歌曲。
+                          </n-text>
+                        </div>
+                      </details>
+                    </template>
+                  </div>
+                </n-form-item>
+                <n-form-item v-if="form.airplay_mode === 'airplay2'" label="AirPlay 2 延迟">
+                  <airplay-latency-control
+                    v-model:value="form.airplay2_output_latency_ms"
+                    :saved-value="savedAirplay.latency" :enabled="canSaveLatency"
+                    :busy="saving || applyingLatency" :applying="applyingLatency"
+                    @apply="saveLatency"
+                  />
+                </n-form-item>
                 <n-form-item label="设备离线自动重启">
                   <n-switch v-model:value="form.auto_restart" />
                 </n-form-item>
-              </n-space>
+              </n-flex>
             </n-form>
           </n-tab-pane>
 
@@ -203,7 +258,7 @@
                       <n-tag size="small" type="warning" round>Beta</n-tag>
                     </n-space>
                     <n-text depth="3" class="field-tip">
-                      DLNA/AirPlay 投送时按控制端传来的歌名/歌手搜小米曲库, 命中则触屏音箱显示该曲歌词与封面; 未命中回退上方的小米云默认封面。AirPlay 元数据迟到的发送端 (如网易云) 会在开播后自动补发。仅对触屏型号生效。
+                      DLNA/AirPlay 1 投送时按控制端传来的歌名/歌手搜小米曲库, 命中则触屏音箱显示该曲歌词与封面; 未命中回退上方的小米云默认封面。AirPlay 1 元数据迟到的发送端 (如网易云) 会在开播后自动补发；AirPlay 2 的 stdout 桥接目前不提供元数据。仅对触屏型号生效。
                     </n-text>
                   </div>
                 </n-form-item>
@@ -359,7 +414,7 @@
     </n-card>
 
     <n-space v-if="tab !== 'about' && tab !== 'loginlog' && tab !== 'other'">
-      <n-button type="primary" :loading="saving" :disabled="loadFailed" @click="save">保存并应用 (热重启服务)</n-button>
+      <n-button type="primary" :loading="saving" :disabled="loading || loadFailed || applyingLatency" @click="save">{{ tab === 'service' ? '保存并应用' : '保存并应用 (热重启服务)' }}</n-button>
     </n-space>
   </n-space>
 </template>
@@ -368,12 +423,12 @@
 import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  NSpace, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
+  NSpace, NFlex, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
   NPopconfirm, NDescriptions, NDescriptionsItem, NAlert, NText, NTabs, NTabPane, NImage,
   NDataTable, NEmpty, NTag, NRadioGroup, NRadioButton, useMessage, type DataTableColumns,
   type SelectOption,
 } from 'naive-ui'
-import { fetchSettings, saveSettings, restartProcess, checkUpdate, testNotify, type UpdateInfo } from '@/api/system'
+import { fetchSettings, fetchStatus, saveSettings, restartProcess, checkUpdate, testNotify, type UpdateInfo } from '@/api/system'
 import { fetchLoginLogs, type LoginLogItem } from '@/api/auth'
 import {
   fetchSpotifyStatus,
@@ -384,6 +439,7 @@ import {
 } from '@/api/spotify'
 import { useAppStore } from '@/stores/app'
 import { useIsMobile } from '@/composables/useIsMobile'
+import AirplayLatencyControl from '@/components/AirplayLatencyControl.vue'
 
 const app = useAppStore()
 
@@ -392,6 +448,8 @@ const loading = ref(false)
 // 设置加载失败时禁用保存, 防止把表单默认值全量覆盖到服务端
 const loadFailed = ref(false)
 const saving = ref(false)
+const applyingLatency = ref(false)
+const savedAirplay = reactive({ mode: 'airplay1', target: '', port: 7000, latency: 1000 })
 
 // 移动端适配: 窄屏时标签改为上方排列, 避免 160px 左标签挤压输入区
 const isMobile = useIsMobile()
@@ -456,6 +514,10 @@ const form = reactive({
   default_volume: 50,
   follow_device_volume: false,
   dlna_port: 8200,
+  airplay_mode: 'airplay1' as 'airplay1' | 'airplay2',
+  airplay2_target_did: '',
+  airplay2_port: 7000,
+  airplay2_output_latency_ms: 1000 as number | null,
   auto_restart: true,
   default_cover_url: '',
   default_audio_id: '',
@@ -477,6 +539,32 @@ const speakerOptions = ref<SelectOption[]>([])
 const dlnaPortHint = computed(() => {
   if (form.dlna_port !== 8200) return ''
   return '端口 8200 可能被 fnOS 自带 DLNA 占用导致启动失败。可改为 8201 等空闲端口, 或在 fnOS 设置 → 文件共享协议中关闭自带 DLNA。'
+})
+
+const airplayTargetOptions = ref<{ label: string; value: string }[]>([])
+const airplayAssignmentSaved = computed(() => savedAirplay.mode === 'airplay2' &&
+  form.airplay_mode === savedAirplay.mode &&
+  form.airplay2_target_did === savedAirplay.target &&
+  form.airplay2_port === savedAirplay.port)
+const canSaveLatency = computed(() => !loading.value && !loadFailed.value && airplayAssignmentSaved.value)
+const airplay2State = reactive({ available: false, running: false, error: '' })
+const airplay2Alert = computed(() => {
+  if (!airplay2State.available) {
+    return {
+      type: 'error' as const,
+      message: airplay2State.error ? `AirPlay 2 不可用：${airplay2State.error}` : '当前运行环境缺少 AirPlay 2 组件，请更新 MiAir Next 或检查部署环境。',
+    }
+  }
+  if (!airplayAssignmentSaved.value) {
+    return { type: 'info' as const, message: '保存设置以应用此 AirPlay 2 音箱分配，并重启接收服务。' }
+  }
+  if (airplay2State.error) {
+    return { type: 'error' as const, message: `接收器已停止：${airplay2State.error}。保存设置可重试。` }
+  }
+  if (airplay2State.running) {
+    return { type: 'success' as const, message: 'AirPlay 2 接收器运行中，请在发送端的 AirPlay 列表中选择此音箱。' }
+  }
+  return { type: 'info' as const, message: '保存设置以应用此 AirPlay 2 音箱分配，并重启接收服务。' }
 })
 
 // 通知渠道选项
@@ -536,6 +624,24 @@ async function load() {
     form.default_volume = s.default_volume
     form.follow_device_volume = s.follow_device_volume
     form.dlna_port = s.dlna_port
+    form.airplay_mode = s.airplay_mode || 'airplay1'
+    form.airplay2_target_did = s.airplay2_target_did || ''
+    form.airplay2_port = s.airplay2_port || 7000
+    form.airplay2_output_latency_ms = s.airplay2_output_latency_ms ?? 1000
+    Object.assign(savedAirplay, {
+      mode: form.airplay_mode, target: form.airplay2_target_did,
+      port: form.airplay2_port, latency: form.airplay2_output_latency_ms,
+    })
+    airplay2State.available = s.airplay2_available
+    airplay2State.running = s.airplay2_running
+    airplay2State.error = s.airplay2_error || ''
+    airplayTargetOptions.value = Object.values(s.speakers).filter((speaker) => speaker.enabled).map((speaker) => ({
+      label: `${speaker.dlna_name || speaker.name} (${speaker.hardware})`,
+      value: speaker.did,
+    }))
+    if (!form.airplay2_target_did && airplayTargetOptions.value.length > 0) {
+      form.airplay2_target_did = airplayTargetOptions.value[0].value
+    }
     form.auto_restart = s.auto_restart
     form.default_cover_url = s.default_cover_url || ''
     form.default_audio_id = s.default_audio_id || ''
@@ -569,19 +675,50 @@ async function load() {
 }
 
 async function save() {
+  if (loading.value || loadFailed.value || saving.value || applyingLatency.value || !validateLatency()) return
   saving.value = true
   try {
-    const payload = { ...form }
+    const payload = { ...form, airplay2_output_latency_ms: form.airplay2_output_latency_ms! }
     // 选择首项"内置默认封面"等同于留空, 提交空串避免误存为具体 audioID
     if (payload.default_audio_id === '448161862632079419') {
       payload.default_audio_id = ''
     }
     await saveSettings(payload)
-    message.success('已保存, 服务正在热重启')
+    Object.assign(savedAirplay, {
+      mode: payload.airplay_mode, target: payload.airplay2_target_did,
+      port: payload.airplay2_port, latency: payload.airplay2_output_latency_ms,
+    })
+    message.success(tab.value === 'service' ? '已保存，服务正在热重启。' : '已保存, 服务正在热重启')
   } catch (e: any) {
-    message.error(e.response?.data?.detail || '保存失败')
+    message.error(e.response?.data?.detail || (tab.value === 'service' ? '保存设置失败。' : '保存失败'))
   } finally {
     saving.value = false
+  }
+}
+
+function validateLatency(): boolean {
+  const value = form.airplay2_output_latency_ms
+  if (value === null || !Number.isInteger(value) || value < 0 || value > 4000) {
+    message.error('请输入 0 到 4000 ms 之间的整数。')
+    return false
+  }
+  return true
+}
+
+async function saveLatency() {
+  if (!canSaveLatency.value || saving.value || applyingLatency.value || !validateLatency()) return
+  const value = form.airplay2_output_latency_ms!
+  if (value === savedAirplay.latency) return
+  applyingLatency.value = true
+  try {
+    // Do not submit other tabs' unsaved drafts while calibrating the speaker.
+    await saveSettings({ airplay2_output_latency_ms: value })
+    savedAirplay.latency = value
+    message.success('延迟已保存，服务正在重启；请重新连接 AirPlay 进行测试。')
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '保存延迟失败，已保留未保存的修改。')
+  } finally {
+    applyingLatency.value = false
   }
 }
 
@@ -709,8 +846,27 @@ async function doSpotifyPair() {
   }
 }
 
+let airplayStatusTimer: ReturnType<typeof setInterval> | undefined
+let refreshingAirplayStatus = false
+
+async function refreshAirplayStatus() {
+  if (refreshingAirplayStatus || tab.value !== 'service') return
+  refreshingAirplayStatus = true
+  try {
+    const status = await fetchStatus()
+    airplay2State.available = status.airplay2_available
+    airplay2State.running = status.airplay2_running
+    airplay2State.error = status.airplay2_error || ''
+  } catch {
+    // A service restart may briefly make the status endpoint unavailable.
+  } finally {
+    refreshingAirplayStatus = false
+  }
+}
+
 onMounted(() => {
   load()
+  airplayStatusTimer = setInterval(refreshAirplayStatus, 5000)
   // 带 ?tab=loginlog 直接进入时也需拉取日志
   if (tab.value === 'loginlog') loadLoginLogs()
   if (tab.value === 'spotify') {
@@ -719,7 +875,10 @@ onMounted(() => {
   }
 })
 
-onUnmounted(() => stopSpotifyPolling())
+onUnmounted(() => {
+  stopSpotifyPolling()
+  if (airplayStatusTimer) clearInterval(airplayStatusTimer)
+})
 </script>
 
 <style scoped>
@@ -734,6 +893,39 @@ onUnmounted(() => stopSpotifyPolling())
   margin-top: 4px;
   /* 允许长链接折行 */
   word-break: break-all;
+}
+
+.airplay-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 600px;
+  min-width: 0;
+}
+.airplay-hint {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.airplay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.airplay-toggle .n-switch {
+  flex-shrink: 0;
+}
+.airplay-hint a {
+  color: inherit;
+  text-underline-offset: 3px;
+}
+.airplay-advanced summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 12px;
+}
+.airplay-advanced[open] summary {
+  margin-bottom: 10px;
 }
 
 .qrcode-img {

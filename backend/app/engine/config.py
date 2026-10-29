@@ -85,6 +85,16 @@ class Config:
     cookie: str = ""
     hostname: str = ""
     dlna_port: int = 8200
+    # AirPlay 协议模式。AirPlay 2 由 shairport-sync + NQPTP 接收，
+    # 测试版在一个 IP 上只启动一个接收器；这不限制与其他 IP 的设备组播。
+    # 环境变量只提供新配置的默认值，不覆盖 Web 后台保存的模式。
+    airplay_mode: str = field(default_factory=lambda: os.getenv("MIAIR_AIRPLAY_MODE", "airplay1"))
+    airplay2_target_did: str = ""
+    airplay2_port: int = 7000
+    # HTTP-write to acoustic output estimate. Higher values send PCM earlier.
+    # The default matches the former stdout backend's nominal 1 s lead, not a
+    # measured Xiaomi delay. Calibrate against a known-good AirPlay 2 receiver.
+    airplay2_output_latency_ms: int = 1000
     web_port: int = 8300
     conf_path: str = "conf"
     verbose: bool = False
@@ -135,6 +145,10 @@ class Config:
 
     def __post_init__(self):
         self.resume_delay_seconds = max(1, min(15, self.resume_delay_seconds))
+        if self.airplay_mode not in ("airplay1", "airplay2"):
+            self.airplay_mode = "airplay1"
+        self.airplay2_port = max(1, min(65535, self.airplay2_port))
+        self.airplay2_output_latency_ms = max(0, min(4000, self.airplay2_output_latency_ms))
         if not self.account:
             self.account = os.getenv("MI_USER", "")
         if not self.password:
@@ -389,6 +403,27 @@ class Config:
             with open(config_file, encoding="utf-8") as f:
                 data = json.load(f)
             data["conf_path"] = conf_path
+            # hostname 是自动探测结果并会持久化。设备重启、Wi-Fi 切换或容器
+            # 网络变化后旧值可能仍是格式合法但已不可达的地址；启动时重新探测，
+            # MIAIR_HOSTNAME 仍作为明确的人工覆盖入口。
+            saved_hostname = str(data.get("hostname") or "").strip()
+            if saved_hostname and not os.getenv("MIAIR_HOSTNAME", "").strip():
+                import ipaddress
+
+                try:
+                    ipaddress.ip_address(saved_hostname)
+                except ValueError:
+                    # 非 IP 主机名可能是用户配置的 DNS 名称，保留它。
+                    pass
+                else:
+                    detected_hostname = cls._detect_local_ip()
+                    if saved_hostname != detected_hostname:
+                        log.warning(
+                            f"持久化的广播地址 {saved_hostname} 已重新探测为 "
+                            f"{detected_hostname}; 如需固定地址请设置 "
+                            "MIAIR_HOSTNAME=<本机局域网IP>"
+                        )
+                    data["hostname"] = detected_hostname
             # 解密敏感字段 (旧明文配置无前缀, 原样通过并在下次保存时升级)
             enc_key = load_or_create_key(conf_path)
             for field_name in _SENSITIVE_FIELDS:

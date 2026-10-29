@@ -1,0 +1,35 @@
+# Isolated source-build testing; normal installs use docker-compose.yml.
+services:
+  miair-next-airplay2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: airplay2
+    image: miair-next:airplay2-test
+    container_name: miair-next-airplay2-test
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cap_add:
+      - SYS_NICE
+    environment:
+      MIAIR_HOSTNAME: ${MIAIR_HOSTNAME:?Set MIAIR_HOSTNAME to the host LAN IP}
+      MIAIR_WEB_PORT: ${MIAIR_WEB_PORT:-8300}
+      # New configurations default to AirPlay 2; existing saved settings win.
+      MIAIR_AIRPLAY_MODE: airplay2
+      # Optional on multi-interface routers, e.g. br-lan:
+      MIAIR_AIRPLAY_INTERFACE: ${MIAIR_AIRPLAY_INTERFACE:-}
+    volumes:
+      # Isolate test settings/accounts from an existing installation.
+      - ./data-airplay2-test:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('MIAIR_WEB_PORT', '8300') + '/api/v1/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

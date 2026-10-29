@@ -6,11 +6,13 @@
 
 import asyncio
 import logging
+import threading
 import time
 
 from zeroconf import Zeroconf, IPVersion
 
 from app.engine.airplay.server import AirPlayServer
+from app.engine.airplay.shairport_server import ShairportSyncServer
 from app.engine.audio_stream import with_cache_buster
 from app.engine.speaker import SpeakerController
 
@@ -21,13 +23,16 @@ class SpeakerAirPlay:
     """单个音箱的 AirPlay 接收器包装"""
 
     def __init__(self, hostname: str, controller: SpeakerController,
-                 shared_zeroconf: Zeroconf | None = None, config=None):
+                 shared_zeroconf: Zeroconf | None = None, config=None,
+                 airplay2: bool = False, airplay2_port: int = 7000):
         self.hostname = hostname
         self.controller = controller
         self.speaker = controller.speaker
         self.shared_zeroconf = shared_zeroconf
         self.config = config
-        self.airplay_server: AirPlayServer | None = None
+        self.airplay2 = airplay2
+        self.airplay2_port = airplay2_port
+        self.airplay_server: AirPlayServer | ShairportSyncServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None  # 保存事件循环引用
         # AirPlay 状态轮询（打断续播）
         self._stream_url: str = ""  # 当前播放的 HTTP 流 URL
@@ -36,6 +41,10 @@ class SpeakerAirPlay:
         self._play_grace_until: float = 0.0  # play 后宽限期
         self._session_audio_id: str | None = None  # 当前会话匹配到的曲库 audioID (续播复用)
         self._backfill_task: asyncio.Task | None = None  # 歌词迟到补发任务
+        self._command_lock = asyncio.Lock()
+        self._command_revision = 0
+        self._command_revision_lock = threading.Lock()
+        self._pending_commands: set = set()
 
     @property
     def device_name(self) -> str:
@@ -66,10 +75,19 @@ class SpeakerAirPlay:
             # 保存当前事件循环，以便在 RTSP 线程中安全调用异步函数
             self._loop = asyncio.get_running_loop()
 
-            self.airplay_server = AirPlayServer(
-                self.hostname, self.device_name, self.shared_zeroconf,
-                speaker_hardware=self.speaker.hardware
-            )
+            if self.airplay2:
+                self.airplay_server = ShairportSyncServer(
+                    self.hostname,
+                    self.device_name,
+                    speaker_hardware=self.speaker.hardware,
+                    port=self.airplay2_port,
+                    output_latency_ms=getattr(self.config, "airplay2_output_latency_ms", 1000),
+                )
+            else:
+                self.airplay_server = AirPlayServer(
+                    self.hostname, self.device_name, self.shared_zeroconf,
+                    speaker_hardware=self.speaker.hardware
+                )
 
             # 设置回调：直接播放到这个音箱
             self.airplay_server.on_play_start = self._on_play_start
@@ -77,7 +95,8 @@ class SpeakerAirPlay:
             self.airplay_server.on_volume_change = self._on_volume_change
 
             await self.airplay_server.start()
-            log.info(f"音箱 {self.device_name} 的 AirPlay 服务已启动，端口: {self.airplay_server.rtsp_port}")
+            protocol = "AirPlay 2" if self.airplay2 else "AirPlay 1"
+            log.info(f"音箱 {self.device_name} 的 {protocol} 服务已启动，端口: {self.airplay_server.rtsp_port}")
         except Exception as e:
             log.error(f"启动音箱 {self.device_name} 的 AirPlay 服务失败: {e}")
             raise
@@ -85,6 +104,15 @@ class SpeakerAirPlay:
     async def stop(self):
         """停止该音箱的 AirPlay 服务"""
         self._airplay_active = False
+        with self._command_revision_lock:
+            self._command_revision += 1
+        if self._backfill_task:
+            self._backfill_task.cancel()
+            try:
+                await self._backfill_task
+            except asyncio.CancelledError:
+                pass
+            self._backfill_task = None
         if self._poll_task:
             self._poll_task.cancel()
             try:
@@ -96,6 +124,27 @@ class SpeakerAirPlay:
             await self.airplay_server.stop()
             self.airplay_server = None
             log.info(f"音箱 {self.device_name} 的 AirPlay 服务已停止")
+        if self.airplay2:
+            with self._command_revision_lock:
+                pending = list(self._pending_commands)
+            if pending:
+                # An old wrapper's delayed stop must finish before a manager
+                # can replace it with another receiver for the same speaker.
+                await asyncio.gather(*(asyncio.wrap_future(f) for f in pending),
+                                     return_exceptions=True)
+
+    def _submit_command(self, command):
+        future = asyncio.run_coroutine_threadsafe(command, self._loop)
+        if self.airplay2:
+            with self._command_revision_lock:
+                self._pending_commands.add(future)
+
+            def finished(done):
+                with self._command_revision_lock:
+                    self._pending_commands.discard(done)
+
+            future.add_done_callback(finished)
+        return future
 
     def _on_play_start(self, stream_url: str):
         """AirPlay 开始播放 - 直接推送到这个音箱
@@ -110,18 +159,59 @@ class SpeakerAirPlay:
                 " 请通过环境变量 MIAIR_HOSTNAME=<本机局域网IP> 指定正确地址。"
             )
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._play_on_speaker(stream_url), self._loop)
+            if self.airplay2:
+                with self._command_revision_lock:
+                    self._command_revision += 1
+                    revision = self._command_revision
+                command = self._apply_airplay2_command(revision, stream_url)
+            else:
+                command = self._play_on_speaker(stream_url)
+            self._submit_command(command)
         else:
             log.warning(f"AirPlay: 事件循环未运行，无法播放到 {self.device_name}")
 
-    async def _play_on_speaker(self, stream_url: str):
+    async def _apply_airplay2_command(self, revision: int, stream_url: str | None):
+        """Serialize MiNA calls; cancellation cannot undo a cloud command."""
+        async with self._command_lock:
+            if revision != self._command_revision:
+                return
+            if stream_url is None:
+                await self._stop_speaker()
+            else:
+                await self._play_on_speaker(stream_url, revision=revision)
+
+    async def _apply_airplay2_lyrics(self, revision, event_seq, stream_url, audio_id):
+        async with self._command_lock:
+            events = self.airplay_server.daap_events if self.airplay_server else []
+            if (revision != self._command_revision or not events
+                    or events[-1][0] != event_seq
+                    or not self._airplay_active or self._stream_url != stream_url):
+                return
+            self._session_audio_id = audio_id
+            self._play_grace_until = time.time() + 10.0
+            await self._resend_play(stream_url, audio_id, revision=revision)
+
+    async def _play_on_speaker(self, stream_url: str, *, revision: int | None = None):
         """在对应音箱上播放"""
         try:
+            if self.airplay2:
+                if self._backfill_task:
+                    self._backfill_task.cancel()
+                    try:
+                        await self._backfill_task
+                    except asyncio.CancelledError:
+                        pass
+                    self._backfill_task = None
+                self._session_audio_id = None
             self._stream_url = stream_url
             self._airplay_active = True
             self._play_grace_until = time.time() + 10.0  # 10秒宽限期
             audio_id = await self._resolve_audio_id()
+            if revision is not None and revision != self._command_revision:
+                return
             success = await self.controller.play_url(stream_url, audio_id)
+            if revision is not None and revision != self._command_revision:
+                return
             if success:
                 log.info(f"AirPlay 音频已在 {self.device_name} 开始播放: {stream_url}")
                 self._start_poll()
@@ -141,6 +231,8 @@ class SpeakerAirPlay:
                             log.error(f"AirPlay 获取当前音量失败: {e}")
                     elif default_vol > 0:
                         await asyncio.sleep(0.5)
+                        if revision is not None and revision != self._command_revision:
+                            return
                         await self.controller.set_volume(default_vol)
                         if self.airplay_server:
                             self.airplay_server._last_volume_db = self._vol_pct_to_db(default_vol)
@@ -157,7 +249,9 @@ class SpeakerAirPlay:
         此处短等最多 1 秒；超时也照常播放（无歌词）不阻塞。
         未命中返回 None，play_url 会回退到小米云默认封面。
         """
-        if not (self.config and getattr(self.config, "touchscreen_lyrics", False)):
+        if self.airplay2 or not (self.config and getattr(self.config, "touchscreen_lyrics", False)):
+            # AP2 starts audio immediately; the watcher matches late metadata
+            # asynchronously and follows every subsequent track transaction.
             return None
         meta = None
         deadline = time.time() + 1.0  # 短宽限等待 DAAP 元数据
@@ -206,8 +300,8 @@ class SpeakerAirPlay:
           直接用缓存 audioID 补发，无需再搜。
         任务随会话存活，停止播放时取消。
         """
-        tried: set[str] = set()       # 搜过未命中的标题（歌词行等），不重复搜索
-        matched: dict[str, str] = {}  # 歌名 -> 命中的 audioID，切回上一首时复用
+        tried: set = set()       # 搜过未命中的标题（歌词行等），不重复搜索
+        matched: dict = {}  # 歌名 -> 命中的 audioID，切回上一首时复用
         # 制作名单行（网易云/Apple Music/QQ都会发），不是歌名，不搜
         credit_prefixes = ("作词", "作詞", "作曲", "编曲", "編曲", "演唱", "词：", "詞：", "曲：")
         last_seq = 0
@@ -221,25 +315,28 @@ class SpeakerAirPlay:
                 if not new_events:
                     continue
                 last_seq = new_events[-1][0]
-                for _, meta in new_events:
+                if self.airplay2:
+                    new_events = new_events[-1:]
+                for event_seq, meta in new_events:
                     title = meta.get("title", "")
-                    if not title:
+                    if not title and not self.airplay2:
                         continue
                     # 候选歌名: minm 标题（非制作名单行）+ derived（从 artist 提取）
-                    titles = [] if title.startswith(credit_prefixes) else [title]
+                    titles = [] if not title or title.startswith(credit_prefixes) else [title]
                     derived = meta.get("derived") or ""
                     if derived and derived != title:
                         titles.append(derived)
                     hit_id = hit_title = ""
                     for cand in titles:
+                        cache_key = (cand, meta.get("artist", "")) if self.airplay2 else cand
                         # 缓存命中（如歌名重复到达 = 切回上一首）：与当前不同则补发
-                        audio_id = matched.get(cand)
+                        audio_id = matched.get(cache_key)
                         if audio_id:
                             hit_id, hit_title = audio_id, cand
                             break
-                        if cand in tried:
+                        if cache_key in tried:
                             continue
-                        tried.add(cand)
+                        tried.add(cache_key)
                         try:
                             audio_id = await asyncio.wait_for(
                                 self.controller.search_audio_id(
@@ -252,13 +349,25 @@ class SpeakerAirPlay:
                         except Exception:
                             continue
                         if audio_id:
-                            matched[cand] = audio_id
+                            matched[cache_key] = audio_id
                             hit_id, hit_title = audio_id, cand
                             break
-                    if not hit_id or hit_id == self._session_audio_id:
-                        continue  # 未命中或与当前歌词同曲，无需重发
                     if not self._airplay_active or self._stream_url != stream_url:
                         return
+                    if self.airplay2:
+                        next_audio_id = hit_id or None
+                        if next_audio_id == self._session_audio_id:
+                            continue
+                        # Searches may be cancelled, but a cloud play already
+                        # sent cannot be undone by cancellation. Keep that
+                        # command tracked and ordered with playback/stop even
+                        # when its watcher is replaced during a seek/shutdown.
+                        future = self._submit_command(self._apply_airplay2_lyrics(
+                            self._command_revision, event_seq, stream_url, next_audio_id))
+                        await asyncio.shield(asyncio.wrap_future(future))
+                        continue
+                    if not hit_id or hit_id == self._session_audio_id:
+                        continue  # 未命中或与当前歌词同曲，无需重发
                     self._session_audio_id = hit_id
                     self._play_grace_until = time.time() + 10.0
                     log.info(f"AirPlay 歌词切换: {hit_title} -> audioID={hit_id} ({self.device_name})")
@@ -266,7 +375,8 @@ class SpeakerAirPlay:
         except asyncio.CancelledError:
             pass
 
-    async def _resend_play(self, stream_url: str, audio_id: str | None):
+    async def _resend_play(self, stream_url: str, audio_id: str | None,
+                           *, revision: int | None = None):
         """重发播放指令并确认音箱真的回来拉流（声音优先于歌词）
 
         补发后音箱会断开旧连接重拉新 URL，最多等 5 秒确认有拉流连接；
@@ -276,11 +386,15 @@ class SpeakerAirPlay:
         await self.controller.play_url(stream_url, audio_id)
         for _ in range(10):
             await asyncio.sleep(0.5)
+            if revision is not None and revision != self._command_revision:
+                return
             if not self._airplay_active or self._stream_url != stream_url:
                 return
             if self.airplay_server and self.airplay_server.stream_has_clients:
                 return
         if not self._airplay_active or self._stream_url != stream_url:
+            return
+        if revision is not None and revision != self._command_revision:
             return
         fresh_url = with_cache_buster(stream_url)
         log.warning(f"AirPlay 补发后音箱未拉流，换新 URL 重试: {fresh_url} ({self.device_name})")
@@ -308,7 +422,14 @@ class SpeakerAirPlay:
         """
         log.info(f"AirPlay 停止播放到 {self.device_name}")
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._stop_speaker(), self._loop)
+            if self.airplay2:
+                with self._command_revision_lock:
+                    self._command_revision += 1
+                    revision = self._command_revision
+                command = self._apply_airplay2_command(revision, None)
+            else:
+                command = self._stop_speaker()
+            self._submit_command(command)
         else:
             log.warning(f"AirPlay: 事件循环未运行，无法停止 {self.device_name}")
 
@@ -440,43 +561,97 @@ class AirPlayManager:
         self.config = config
         self.speaker_airplays: dict[str, SpeakerAirPlay] = {}  # did -> SpeakerAirPlay
         self._shared_zeroconf: Zeroconf | None = None
+        self._airplay2_running = False
+        self._airplay2_error = ""
+        self.airplay2_target_did = ""
+
+    @property
+    def airplay2_running(self) -> bool:
+        if not self._airplay2_running:
+            return False
+        sap = self.speaker_airplays.get(self.airplay2_target_did)
+        server = sap.airplay_server if sap else None
+        return bool(server and getattr(server, "running", True))
+
+    @property
+    def airplay2_error(self) -> str:
+        if self._airplay2_error:
+            return self._airplay2_error
+        sap = self.speaker_airplays.get(self.airplay2_target_did)
+        server = sap.airplay_server if sap else None
+        return getattr(server, "last_error", "") if server else ""
 
     def _ensure_shared_zeroconf(self) -> Zeroconf:
-        """获取或创建共享 Zeroconf 实例"""
+        """Get or create the shared AirPlay 1 discovery instance."""
         if not self._shared_zeroconf:
             self._shared_zeroconf = Zeroconf(ip_version=IPVersion.All)
             log.info("创建共享 Zeroconf 实例用于所有音箱")
         return self._shared_zeroconf
 
     async def start_for_speakers(self, controllers: dict[str, SpeakerController]):
-        """为所有音箱启动 AirPlay 服务"""
-        self._ensure_shared_zeroconf()
+        """Select the AP2 target, then start each visible speaker's receiver."""
+        self._airplay2_error = ""
+        self._airplay2_running = False
+        self.airplay2_target_did = ""
+        if getattr(self.config, "airplay_mode", "airplay1") == "airplay2" and controllers:
+            requested_target = getattr(self.config, "airplay2_target_did", "")
+            if requested_target in controllers:
+                self.airplay2_target_did = requested_target
+            elif not requested_target:
+                self.airplay2_target_did = next(iter(controllers))
+            else:
+                # Never silently redirect audio to a different room/device.
+                self._airplay2_error = f"AirPlay 2 目标音箱 {requested_target} 不可用，请重新选择；已回退 AirPlay 1"
+                log.warning(self._airplay2_error)
         for did, controller in controllers.items():
             await self.show_speaker(did, controller)
         log.info(f"共启动了 {len(self.speaker_airplays)} 个音箱的 AirPlay 服务")
 
     async def hide_speaker(self, did: str) -> None:
-        """停止并移除指定音箱的 AirPlay 服务"""
+        """Stop an offline receiver, retaining its AP2 assignment for recovery."""
         speaker_airplay = self.speaker_airplays.pop(did, None)
         if speaker_airplay is None:
             return
+        if did == self.airplay2_target_did:
+            self._airplay2_running = False
         try:
             await speaker_airplay.stop()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.error(f"隐藏音箱 AirPlay 失败: {e}")
 
     async def show_speaker(self, did: str, controller: SpeakerController) -> None:
-        """创建并启动指定音箱的 AirPlay 服务"""
+        """Start the assigned protocol when a speaker becomes visible again."""
         if did in self.speaker_airplays:
             return
-        zeroconf = self._ensure_shared_zeroconf()
+        is_airplay2_target = (
+            getattr(self.config, "airplay_mode", "airplay1") == "airplay2"
+            and did == self.airplay2_target_did
+        )
+        zeroconf = None if is_airplay2_target else self._ensure_shared_zeroconf()
         try:
             speaker_airplay = SpeakerAirPlay(
-                self.hostname, controller, zeroconf, config=self.config
+                self.hostname, controller, zeroconf, config=self.config,
+                airplay2=is_airplay2_target,
+                airplay2_port=getattr(self.config, "airplay2_port", 7000),
             )
-            await speaker_airplay.start()
+            try:
+                await speaker_airplay.start()
+            except Exception as e:
+                if not is_airplay2_target:
+                    raise
+                self._airplay2_error = str(e)
+                self._airplay2_running = False
+                log.error("AirPlay 2 启动失败，回退到 AirPlay 1: %s", e)
+                speaker_airplay = SpeakerAirPlay(
+                    self.hostname, controller, self._ensure_shared_zeroconf(),
+                    config=self.config,
+                )
+                await speaker_airplay.start()
             self.speaker_airplays[did] = speaker_airplay
-        except Exception as e:  # noqa: BLE001
+            if is_airplay2_target and speaker_airplay.airplay2:
+                self._airplay2_running = True
+                self._airplay2_error = ""
+        except Exception as e:
             log.error(f"为音箱 {controller.speaker.get_dlna_name()} 启动 AirPlay 失败: {e}")
 
     async def stop(self):
@@ -487,6 +662,8 @@ class AirPlayManager:
             except Exception as e:
                 log.error(f"停止音箱 AirPlay 失败: {e}")
         self.speaker_airplays.clear()
+        self._airplay2_running = False
+        self.airplay2_target_did = ""
 
         # 关闭共享的 zeroconf
         if self._shared_zeroconf:

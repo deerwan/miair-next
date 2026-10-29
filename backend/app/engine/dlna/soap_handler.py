@@ -270,6 +270,13 @@ async def _handle_avtransport(
         }), 200
 
     elif action == "SetPlayMode":
+        play_mode = str(params.get("NewPlayMode", "")).strip()
+        if not play_mode:
+            raise InvalidArgs("缺少必填参数 NewPlayMode")
+        if not renderer.set_play_mode(play_mode):
+            raise InvalidArgs(
+                f"不支持的播放模式 {play_mode!r}; 当前支持 NORMAL 和 REPEAT_ONE"
+            )
         return soap_response(AVTRANSPORT_URN, action, {}), 200
 
     else:

@@ -504,6 +504,20 @@ class AirPlayServer:
         self._rtcp_control_addr: tuple | None = None  # iPhone 的 control 地址
         self._rtp_data_socket: socket.socket | None = None  # RTP 数据 socket（用于注入重传包）
         self._flush_flag = threading.Event()  # FLUSH 请求标志（跨线程通知）
+        self._audio_metrics_lock = threading.Lock()
+        self._audio_metrics = {
+            "rtp_packets_received": 0,
+            "rtp_queue_drops": 0,
+            "decode_success": 0,
+            "decode_errors": 0,
+            "decode_empty_packets": 0,
+            "decrypt_failures": 0,
+            "lost_frames_filled": 0,
+            "pcm_bytes": 0,
+            "last_rtp_packet_at": 0.0,
+            "last_decode_error": "",
+        }
+        self._decode_queue: queue.Queue | None = None
 
         # 时间同步（新增）
         self._timing_pacer: PlaybackPacer | None = None
@@ -639,6 +653,42 @@ class AirPlayServer:
     def client_name(self) -> str:
         """获取当前连接的客户端名称"""
         return self._client_name
+
+    def _update_audio_metrics(self, **values) -> None:
+        with self._audio_metrics_lock:
+            for key, value in values.items():
+                if key == "last_decode_error":
+                    self._audio_metrics[key] = str(value)[:160]
+                elif key == "last_rtp_packet_at":
+                    self._audio_metrics[key] = float(value)
+                else:
+                    self._audio_metrics[key] += int(value)
+
+    def get_audio_diagnostics(self) -> dict:
+        """返回 AirPlay 音频管道的轻量运行指标"""
+        with self._audio_metrics_lock:
+            metrics = dict(self._audio_metrics)
+        last_packet_at = metrics.pop("last_rtp_packet_at")
+        metrics["last_rtp_packet_age_seconds"] = (
+            round(max(0.0, time.time() - last_packet_at), 1)
+            if last_packet_at
+            else None
+        )
+        metrics.update({
+            "playing": self.is_playing,
+            "sample_rate": self._sample_rate,
+            "channels": self._channels,
+            "rtp_queue_depth": self._decode_queue.qsize() if self._decode_queue else 0,
+            "stream_clients": self._stream_server.client_count,
+            "stream_queue_depth": self._stream_server.queue_depth,
+            "stream_pending_dropped_bytes": self._stream_server.pending_drop_bytes,
+        })
+        return metrics
+
+    def _reset_audio_diagnostics(self) -> None:
+        with self._audio_metrics_lock:
+            for key in self._audio_metrics:
+                self._audio_metrics[key] = "" if key == "last_decode_error" else 0
 
     async def start(self):
         """启动 AirPlay 服务"""
@@ -813,6 +863,7 @@ class AirPlayServer:
                     self._send_rtsp_response(sock, 200, cseq, response_headers)
 
                 elif method == "ANNOUNCE":
+                    self._reset_audio_diagnostics()
                     self._is_playing = True
                     self._daap_meta = None  # 新会话，清除上一会话元数据
                     self._daap_candidates = []
@@ -1503,6 +1554,7 @@ class AirPlayServer:
 
         # 解码队列
         decode_queue: queue.Queue[PacketData | None] = queue.Queue(maxsize=200)
+        self._decode_queue = decode_queue
         running = True
 
         # ---- Stage 2: 解码线程（带 pacer 调度） ----
@@ -1525,6 +1577,7 @@ class AirPlayServer:
                     # 静音帧直接写入
                     if item.seq == -1:
                         _write_pcm(item.payload)
+                        self._update_audio_metrics(pcm_bytes=len(item.payload))
                         continue
 
                     # 解密
@@ -1541,12 +1594,16 @@ class AirPlayServer:
                                 payload = decrypted
                         except Exception:
                             _write_pcm(_silence_frame)
+                            self._update_audio_metrics(
+                                decrypt_failures=1, pcm_bytes=len(_silence_frame)
+                            )
                             continue
 
                     # 解码并输出
                     decoded = _decode_audio(payload)
                     if decoded:
                         _write_pcm(decoded)
+                        self._update_audio_metrics(pcm_bytes=len(decoded))
             except Exception as e:
                 log.error(f"RTP 解码线程异常: {e}")
 
@@ -1580,6 +1637,10 @@ class AirPlayServer:
                     nbytes, addr = rtp_socket.recvfrom_into(_recv_buf)
                     if nbytes < 12:
                         continue
+
+                    self._update_audio_metrics(
+                        rtp_packets_received=1, last_rtp_packet_at=time.time()
+                    )
 
                     seq = (_recv_buf[2] << 8) | _recv_buf[3]
                     rtp_timestamp = (_recv_buf[4] << 24) | (_recv_buf[5] << 16) | \
@@ -1622,7 +1683,7 @@ class AirPlayServer:
                         try:
                             decode_queue.put_nowait(PacketData(d_seq, d_ts, d_payload))
                         except queue.Full:
-                            pass
+                            self._update_audio_metrics(rtp_queue_drops=1)
                     if drained:
                         next_seq = (drained[-1][0] + 1) & 0xFFFF
                         for d_seq, _, _ in drained:
@@ -1669,6 +1730,7 @@ class AirPlayServer:
                                                 PacketData(-1, 0, _silence_frame))
                                         except queue.Full:
                                             pass
+                                    self._update_audio_metrics(lost_frames_filled=gap)
                                     next_seq = next_avail
                                     # 清理跳过范围的重传状态
                                     for s in range(missing_seq, next_avail):
@@ -1700,11 +1762,13 @@ class AirPlayServer:
             except queue.Full:
                 pass
             rtp_socket.close()
+            self._decode_queue = None
             log.info("RTP 接收线程结束")
 
     def _decode_audio(self, data: bytes) -> bytes | None:
         """解码音频数据为 PCM"""
         if not self._codec_context:
+            self._update_audio_metrics(decode_success=1)
             return data
 
         silence = self._silence_frame
@@ -1713,6 +1777,7 @@ class AirPlayServer:
             packet = av.packet.Packet(data)
             frames = self._codec_context.decode(packet)
             if not frames:
+                self._update_audio_metrics(decode_empty_packets=1)
                 return silence
 
             ch2 = self._channels * 2
@@ -1726,8 +1791,15 @@ class AirPlayServer:
                 else:
                     mv = memoryview(resampled.planes[0])
                     parts.append(bytes(mv[:resampled.samples * ch2]))
-            return b"".join(parts) if parts else silence
-        except Exception:
+            if not parts:
+                self._update_audio_metrics(decode_empty_packets=1)
+                return silence
+            self._update_audio_metrics(decode_success=1)
+            return b"".join(parts)
+        except Exception as e:
+            self._update_audio_metrics(
+                decode_errors=1, last_decode_error=f"{type(e).__name__}: {e}"
+            )
             return silence
 
     def _send_rtsp_response(self, sock: socket.socket, code: int, cseq: str, headers: dict | None = None):

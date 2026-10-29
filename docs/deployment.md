@@ -34,6 +34,10 @@ docker compose up -d
 
 启动后访问 `http://<宿主机IP>:8300`,首次访问将引导创建管理员账号,登录后在「账号配置」中填入小米账号 / Cookie 并选择音箱。
 
+## AirPlay 2（实验性）
+
+标准镜像已包含 Shairport Sync 和 NQPTP，按上述原有流程安装或更新即可，无需另装镜像。保留原有数据目录，更新后在「系统设置 → 服务设置」开启「为一个音箱启用 AirPlay 2（实验性）」并选择目标音箱、保存。其他音箱继续使用 AirPlay 1，已有协议配置会保留。参阅[配置、验证和限制](deployment-airplay2.md)。
+
 ## 管理脚本 manage.sh
 
 ```bash
@@ -52,12 +56,12 @@ docker compose up -d
 
 | 标签 | 触发方式 | 用途 |
 | --- | --- | --- |
-| `edge` | 推送到 `main` 分支 | 尝鲜 / 测试最新代码 |
-| `latest` | 打 `v*.*.*` tag | 最新稳定版 |
+| `edge` | 推送到 `main` 分支并通过检查 | 最新主分支镜像 |
+| `latest` | 推送到 `main` 或打 `v*.*.*` tag 并通过检查 | 原有安装 / 更新流程默认使用的镜像 |
 | `1.2.3` / `1.2` | 打 `v1.2.3` tag | 锁定具体版本 |
 | `<short-sha>` | 每次构建 | 精确回滚定位 |
 
-镜像由 GitHub Actions 云端构建,支持 `linux/amd64`、`linux/arm64`(涵盖 x86 主机 / NAS、树莓派 4+ 等主流部署环境)。打 tag 时 CI 还会自动创建 GitHub Release,供管理后台「检查更新」检测。
+镜像由 GitHub Actions 云端构建,支持 `linux/amd64`、`linux/arm64`(涵盖 x86 主机 / NAS、树莓派 4+ 等主流部署环境)。发布前必须通过后端 / 前端检查及两种架构的标准镜像启动和 AirPlay 2 生命周期检查。合并到 `main` 且流水线成功后，按原有流程拉取并重建容器即可使用新镜像；运行中的容器不会自动更新。打 tag 时 CI 还会自动创建 GitHub Release,供管理后台「检查更新」检测；仅更新 `main` 镜像不会产生新的 Release 通知。
 
 ## 数据目录
 
@@ -77,6 +81,8 @@ data/
 
 > ⚠️ **凭据存储**: `conf/config.json` 中的小米账号密码、Cookie、飞书 Webhook、Spotify API Key 等敏感字段使用 AES-GCM 加密；`conf/enc.key` 必须与配置一起备份。`.mi.token` 仍包含明文 serviceToken，文件权限限制为 `600`。`enc.key` 与配置位于同一目录，因此整个数据目录或备份仍应妥善保护并加密存放。
 
+DLNA 媒体缓冲的大文件会滚动写入 `conf` 所在的数据目录，普通播放和代理 Range 响应按块读写。缓冲总量最多 200 MiB，并根据剩余空间下调预算；请确保数据目录可写且有足够空间。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -84,7 +90,7 @@ data/
 | `MIAIR_DATA` | `/app/data` | 数据目录 |
 | `MIAIR_WEB_HOST` | `0.0.0.0` | Web 监听地址 |
 | `MIAIR_WEB_PORT` | `8300` | Web 管理后台端口(host 网络直连,无需 `-p` 映射) |
-| `MIAIR_HOSTNAME` | 自动探测 | 强制指定本机局域网 IP。优先级最高,覆盖持久化配置中的值;用于多网卡/软路由环境下自动探测到错误 IP(如回环地址)导致 AirPlay/DLNA 拉流无声时手动纠正 |
+| `MIAIR_HOSTNAME` | 自动探测 | 强制指定本机局域网 IP。优先级最高,覆盖持久化配置中的值;用于多网卡/软路由环境下自动探测到错误 IP 时手动纠正。持久化的自动探测 IP 会在每次启动时重新检测,以适应网卡或网络变化 |
 | `MIAIR_GITHUB_REPO` | `deerwan/miair-next` | 检查更新用的 GitHub 仓库(Releases API) |
 | `MIAIR_TOKEN_EXPIRE_HOURS` | `24` | 面板 JWT 有效期(小时) |
 | `MIAIR_TRUST_PROXY` | 空(关闭) | 置 `1` / `true` / `yes` 时采信 `X-Forwarded-For` / `X-Real-IP` 作为客户端 IP |

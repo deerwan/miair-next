@@ -1,5 +1,6 @@
 # 数据与密钥 (绝不打进镜像)
 data/
+data-airplay2-test/
 **/data/
 *.db
 secret.key
@@ -9,15 +10,20 @@ secret.key
 # 前端依赖与产物 (镜像内重新构建)
 frontend/node_modules/
 frontend/dist/
+dist/
 
 # Python 缓存
 **/__pycache__/
 *.py[cod]
 .venv/
+**/.venv/
 venv/
 *.egg-info/
 
 # 开发环境
+.env
+.env.*
+!.env.example
 .git/
 .github/
 .idea/
@@ -27,7 +33,8 @@ venv/
 !README.md
 
 # 开发 / 调试脚本不进生产镜像
-backend/scripts/
+backend/scripts/*
+!backend/scripts/entrypoint.sh
 
 # 测试代码不进生产镜像
 backend/tests/

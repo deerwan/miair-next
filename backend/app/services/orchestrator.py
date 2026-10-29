@@ -8,6 +8,7 @@
 
 import asyncio
 import logging
+import shutil
 import time
 
 from app.engine.airplay.speaker_airplay import AirPlayManager
@@ -65,6 +66,21 @@ class Orchestrator:
         if udn:
             return self.renderers.get(udn)
         return None
+
+    @property
+    def airplay2_available(self) -> bool:
+        """当前运行环境是否包含 AirPlay 2 外部组件。"""
+        return bool(shutil.which("shairport-sync") and shutil.which("nqptp"))
+
+    @property
+    def airplay2_running(self) -> bool:
+        return bool(self.airplay_manager and self.airplay_manager.airplay2_running)
+
+    @property
+    def airplay2_error(self) -> str:
+        if not self.airplay_manager:
+            return ""
+        return self.airplay_manager.airplay2_error
 
     async def get_all_devices(self) -> list[dict]:
         """获取小米账号下所有设备列表"""

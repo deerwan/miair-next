@@ -16,6 +16,8 @@ from app.engine.const import (
     TRANSPORT_STATE_STOPPED,
     TRANSPORT_STATE_TRANSITIONING,
     TRANSPORT_STATUS_OK,
+    PLAY_MODE_NORMAL,
+    PLAY_MODE_REPEAT_ONE,
 )
 from app.engine.speaker import SpeakerController
 from app.engine.dlna.cover import resolve_default_cover_url
@@ -46,6 +48,9 @@ class DLNARenderer:
         self.current_uri = ""
         self.current_uri_metadata = ""
         self.play_speed = "1"
+        # 当前可执行的播放模式。此渲染器没有完整播放列表，因此只支持
+        # NORMAL 与 REPEAT_ONE，避免对控制端谎报 REPEAT_ALL/SHUFFLE。
+        self.play_mode = PLAY_MODE_NORMAL
 
         # 音量/静音
         self.volume = default_volume
@@ -295,7 +300,9 @@ class DLNARenderer:
                     if near_end_count >= 2:
                         log.info(f"[{self.friendly_name}] 歌曲即将结束，剩余 {self._track_duration - current_position:.1f} 秒")
                         # 主动触发下一曲
-                        asyncio.get_running_loop().create_task(self.next_track())
+                        asyncio.get_running_loop().create_task(
+                            self.next_track(automatic=True)
+                        )
                         break
                 elif self._track_duration <= 0 and current_position >= _UNKNOWN_DURATION_PLAY_LIMIT:
                     # 曲长未知 (元数据缺失且嗅探失败) 且已连续播放超过上限:
@@ -305,7 +312,9 @@ class DLNARenderer:
                         f"{current_position:.0f}s (超过 {_UNKNOWN_DURATION_PLAY_LIMIT:.0f}s 上限), "
                         "模拟自然播完以重置计时"
                     )
-                    asyncio.get_running_loop().create_task(self.next_track())
+                    asyncio.get_running_loop().create_task(
+                        self.next_track(automatic=True)
+                    )
                     break
                 else:
                     near_end_count = 0
@@ -592,8 +601,16 @@ class DLNARenderer:
             return True
         return False
 
-    async def next_track(self):
+    async def next_track(self, *, automatic: bool = False):
         """播放下一曲"""
+        if automatic and self.play_mode == PLAY_MODE_REPEAT_ONE and self.current_uri:
+            # 到曲尾时重放当前 URI；手动 Next 仍遵循 SetNextAVTransportURI。
+            self._accumulated_time = 0.0
+            self._play_start_time = 0.0
+            log.info(f"[{self.friendly_name}] 单曲循环: 从头重播当前曲目")
+            await self.play()
+            return
+
         if self.next_uri:
             # 先停止当前播放
             if self.abort_proxy_func:
@@ -749,9 +766,18 @@ class DLNARenderer:
     def get_transport_settings(self) -> dict:
         """获取传输设置 (DLNA GetTransportSettings)"""
         return {
-            "PlayMode": "NORMAL",
+            "PlayMode": self.play_mode,
             "RecQualityMode": "NOT_IMPLEMENTED",
         }
+
+    def set_play_mode(self, play_mode: str) -> bool:
+        """设置支持的播放模式。当前无完整队列，只支持正常与单曲循环。"""
+        normalized = play_mode.strip().upper()
+        if normalized not in (PLAY_MODE_NORMAL, PLAY_MODE_REPEAT_ONE):
+            return False
+        self.play_mode = normalized
+        log.info(f"[{self.friendly_name}] 播放模式: {normalized}")
+        return True
 
     async def set_volume(self, volume: int) -> bool:
         """设置音量"""

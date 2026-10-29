@@ -235,14 +235,14 @@ def test_check_play_status_triggers_next_when_duration_unknown(monkeypatch):
         r._accumulated_time = 5.0  # 已超过 1.0s 上限
         called = []
 
-        async def fake_next():
-            called.append(True)
+        async def fake_next(*, automatic=False):
+            called.append(automatic)
 
         r.next_track = fake_next
         task = asyncio.create_task(r._check_play_status())
         await asyncio.sleep(1.6)
         task.cancel()
-        assert called, "曲长未知且超限时应触发 next_track 模拟自然播完"
+        assert called == [True], "曲长未知且超限时应触发自动 next_track 模拟自然播完"
 
     asyncio.run(run())
 
@@ -292,14 +292,14 @@ def test_check_play_status_triggers_next_near_end():
         r._play_start_time = 0.0
         called = []
 
-        async def fake_next():
-            called.append(True)
+        async def fake_next(*, automatic=False):
+            called.append(automatic)
 
         r.next_track = fake_next
         task = asyncio.create_task(r._check_play_status())
         await asyncio.sleep(2.2)
         task.cancel()
-        assert called, "接近曲尾时应触发 next_track (回归)"
+        assert called == [True], "接近曲尾时应触发自动 next_track (回归)"
 
     asyncio.run(run())
 

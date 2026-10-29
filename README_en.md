@@ -30,6 +30,8 @@ Built on top of the protocol layer from [MiAir](https://github.com/KiriChen-Wind
 
 Turn your XiaoAI speaker into a **DLNA renderer**, an **AirPlay receiver**, and a **Spotify Connect device**, plus Xiaomi Cloud control, on-screen lyrics/cover, a web admin dashboard, notifications, a tri-state theme, and hot-restart.
 
+The standard image includes AirPlay 2 components. Install or update as usual, then enable experimental AirPlay 2 for one selected speaker in service settings; other enabled speakers retain AirPlay 1. See [setup and limitations](docs/deployment-airplay2.md). Acoustic synchronization remains unverified.
+
 > Full feature list: [Features Docs](docs/features.md).
 
 ---

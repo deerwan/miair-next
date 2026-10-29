@@ -25,6 +25,8 @@ def _collect_status(orch) -> dict:
         airplay_active = False
         airplay_client = ""
         title = artist = source = ""
+        album = artwork_id = ""
+        airplay_track = None
         if renderer and renderer.transport_state == "PLAYING":
             # DLNA 路线: 投送元数据里的歌名/歌手 (控制点投送时自带, 准确)
             title, artist = renderer._track_title, renderer._track_artist
@@ -34,14 +36,24 @@ def _collect_status(orch) -> dict:
             if sap and sap.airplay_server and sap.airplay_server.is_playing:
                 airplay_active = True
                 airplay_client = sap.airplay_server.client_name
-                # AirPlay 不展示 DAAP 歌名/歌手: 元数据由发送端 App 可选下发,
-                # 不少 App 切歌时不更新, 展示出来常与实际内容不符
-                # (设备名与"播放中"状态是可靠的, 保留)
+                airplay_track = getattr(sap.airplay_server, "track_metadata", None)
+                # AP2 publishes complete metadata transactions; AP1 retains
+                # its existing status without optional/stale DAAP titles.
                 source = "airplay"
+        airplay_audio = None
+        if orch.airplay_manager:
+            sap = orch.airplay_manager.speaker_airplays.get(did)
+            if sap and sap.airplay_server:
+                airplay_audio = sap.airplay_server.get_audio_diagnostics()
         spotify_info = collect_spotify_speaker_status(orch, did)
         if airplay_active:
             # AirPlay 实际发声时清掉可能残留的 DLNA 标题, 避免串台
             title = artist = ""
+            if airplay_track:
+                title = airplay_track.get("title", "")
+                artist = airplay_track.get("artist", "")
+                album = airplay_track.get("album", "")
+                artwork_id = airplay_track.get("artwork_id", "")
         elif (
             not source
             and spotify_info.get("is_target")
@@ -59,6 +71,7 @@ def _collect_status(orch) -> dict:
             "transport_state": renderer.transport_state if renderer else "UNKNOWN",
             "current_uri": renderer.current_uri if renderer else "",
             "airplay_active": airplay_active,
+            "airplay_audio": airplay_audio,
             "now_playing": {
                 "playing": bool(renderer and renderer.transport_state == "PLAYING")
                 or airplay_active
@@ -67,6 +80,8 @@ def _collect_status(orch) -> dict:
                 "title": title,
                 "artist": artist,
                 "client": airplay_client,
+                "album": album,
+                "artwork_id": artwork_id,
             },
             "spotify": spotify_info,
         })

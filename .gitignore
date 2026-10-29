@@ -17,6 +17,7 @@ frontend/.vite/
 
 # 运行数据 (账号 / 密钥 / 配置持久化)
 data/
+data-airplay2-test/
 *.db
 secret.key
 .mi.token

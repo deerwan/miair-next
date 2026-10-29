@@ -95,10 +95,19 @@ class DeviceServer:
         self._paused_proxy_udns: set[str] = set()
         # 周期性缓冲清理任务
         self._buffer_cleanup_task: asyncio.Task | None = None
-        # 内存上限: 缓冲总大小不超过 200MB;
-        # 与 media_buffer._MAX_DOWNLOAD_SIZE (64MB) 保持 >=3 倍关系,
-        # 确保单个大文件无法吃光预算、把正在播放的缓冲挤进淘汰逻辑
-        self._max_buffer_memory = 200 * 1024 * 1024
+        # spool 大文件写入配置数据目录，避免 OpenWrt 等系统的 /tmp tmpfs
+        # 让“落盘”缓冲仍消耗大量 RAM。总预算上限 200MB，并尽量保留 32MB 空间。
+        self._buffer_temp_dir = getattr(config, "conf_path", None)
+        self._max_buffer_memory = 200 * 1024 * 1024  # 名称保留兼容旧调用方
+        if self._buffer_temp_dir:
+            try:
+                os.makedirs(self._buffer_temp_dir, exist_ok=True)
+                free_bytes = shutil.disk_usage(self._buffer_temp_dir).free
+                self._max_buffer_memory = min(
+                    self._max_buffer_memory, max(0, free_bytes - 32 * 1024 * 1024)
+                )
+            except OSError as e:
+                log.warning(f"无法读取缓冲目录剩余空间，使用默认缓冲预算: {e}")
         # fire-and-forget 任务集合
         self._background_tasks: set[asyncio.Task] = set()
         self._setup_routes()
@@ -177,6 +186,10 @@ class DeviceServer:
 
     # ---- 音频缓冲/代理系统 ----
 
+    def _new_media_buffer(self, remote_url: str) -> MediaBuffer:
+        """在数据目录创建有界 spool 缓冲，避免临时文件写入 RAM 文件系统。"""
+        return MediaBuffer(remote_url, temp_dir=self._buffer_temp_dir)
+
     def start_buffering(self, remote_url: str):
         """预缓冲：在 SetAVTransportURI 时提前开始下载"""
         if remote_url in self._url_to_buffer:
@@ -187,7 +200,7 @@ class DeviceServer:
             log.warning(f"缓冲资源不足，跳过预缓冲: {remote_url[:80]}...")
             return
         buffer_id = secrets.token_urlsafe(16)
-        buf = MediaBuffer(remote_url)
+        buf = self._new_media_buffer(remote_url)
         self._media_buffers[buffer_id] = buf
         self._url_to_buffer[remote_url] = buffer_id
         self._buffer_created_time[buffer_id] = time.time()
@@ -211,7 +224,7 @@ class DeviceServer:
             log.warning(f"缓冲资源不足，回退到原始媒体 URL: {remote_url[:80]}...")
             return remote_url
         buffer_id = secrets.token_urlsafe(16)
-        buf = MediaBuffer(remote_url)
+        buf = self._new_media_buffer(remote_url)
         self._media_buffers[buffer_id] = buf
         self._url_to_buffer[remote_url] = buffer_id
         asyncio.get_running_loop().create_task(buf.start_download(self._get_proxy_session()))
@@ -224,8 +237,8 @@ class DeviceServer:
     async def probe_duration(self, remote_url: str, timeout: float = 20.0) -> float:
         """从远端 URL 对应的缓冲数据嗅探音频时长（秒），无缓冲或失败返回 0
 
-        元数据缺失 duration 时的兜底：等待预缓冲头部就绪后取容器头部数据
-        探测，无需下载完成。bytearray 并发写入下切片拷贝是原子读，安全。
+        元数据缺失 duration 时的兜底：等待预缓冲头部就绪后读取连续前缀，
+        探测无需将完整音频载入内存。
         """
         buffer_id = self._url_to_buffer.get(remote_url)
         buf = self._media_buffers.get(buffer_id) if buffer_id else None
@@ -237,14 +250,16 @@ class DeviceServer:
             pass
         deadline = time.monotonic() + timeout
         while not buf.download_complete and not buf.error:
-            if len(buf.data) >= _PROBE_MIN_BYTES or time.monotonic() >= deadline:
+            if buf.contiguous_size >= _PROBE_MIN_BYTES or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(0.25)
-        if buf.error or len(buf.data) == 0:
+        available = buf.downloaded_size if buf.download_complete else buf.contiguous_size
+        if buf.error or available == 0:
             return 0.0
-        # 直接传 bytearray 引用: 截断/拷贝在 probe 内部的线程池执行,
-        # 避免大缓冲 (上限 200MB) 在事件循环里全量拷贝造成阻塞
-        return await probe_audio_duration(buf.data)
+        probe_data = await asyncio.to_thread(
+            buf.read_range, 0, min(available, 2 * 1024 * 1024)
+        )
+        return await probe_audio_duration(probe_data)
 
     async def create_seek_url(
         self, original_url: str, seek_seconds: float, duration: float, udn: str = ""
@@ -260,7 +275,7 @@ class DeviceServer:
                 log.warning("缓冲资源不足，跳过 Seek 缓冲创建")
                 return None
             buffer_id = secrets.token_urlsafe(16)
-            buf = MediaBuffer(original_url)
+            buf = self._new_media_buffer(original_url)
             self._media_buffers[buffer_id] = buf
             self._url_to_buffer[original_url] = buffer_id
             # 启动下载
@@ -287,13 +302,21 @@ class DeviceServer:
             except asyncio.TimeoutError:
                 log.warning("Seek: 缓冲等待超时，尝试使用当前可用数据")
                 # 如果缓冲未完成但有足够数据（至少2MB），继续处理
-                if len(buf.data) < 2 * 1024 * 1024:
-                    log.warning(f"Seek: 缓冲数据不足 ({len(buf.data)} bytes)")
+                if buf.contiguous_size < 2 * 1024 * 1024:
+                    log.warning(f"Seek: 缓冲数据不足 ({buf.contiguous_size} bytes)")
                     return None
+
+        # Seek / 格式回退算法需要随机访问源音频。只在触发 Seek 时将其短暂
+        # 读入内存，普通播放与代理 Range 响应始终按块从 spool 读取。
+        available = buf.downloaded_size if buf.download_complete else buf.contiguous_size
+        data = await asyncio.to_thread(buf.read_range, 0, available)
+        if not data:
+            log.warning("Seek: 缓冲数据为空")
+            return None
 
         # 元数据缺失 duration 时从缓冲数据嗅探兜底, 避免静默回退软 Seek
         if duration <= 0:
-            duration = await probe_audio_duration(buf.data)
+            duration = await probe_audio_duration(data)
             if duration <= 0:
                 log.warning("Seek: 无法确定音轨时长 (元数据缺失且嗅探失败)")
                 return None
@@ -304,7 +327,7 @@ class DeviceServer:
             return None
 
         seek_ratio = seek_seconds / duration
-        fmt = self._detect_audio_format(buf.data)
+        fmt = self._detect_audio_format(data)
         log.info(
             f"Seek 开始: {seek_seconds:.1f}/{duration:.1f}s, "
             f"格式={fmt}, content_type={buf.content_type}, "
@@ -313,19 +336,19 @@ class DeviceServer:
 
         # 1) 尝试 ffmpeg（最可靠）
         seeked_data = await self._ffmpeg_seek(
-            buf.data, seek_seconds, buf.content_type
+            data, seek_seconds, buf.content_type
         )
 
         # 2) 回退: 格式感知的纯 Python seek
         if seeked_data is None:
-            seeked_data = self._format_seek(buf.data, seek_ratio, buf.content_type)
+            seeked_data = self._format_seek(data, seek_ratio, buf.content_type)
 
         if seeked_data is None or len(seeked_data) == 0:
             log.warning(f"Seek: 无法生成有效的 seeked 音频数据 (格式={fmt})")
             return None
 
         # 将 seeked 数据存为新缓冲
-        seek_buf = MediaBuffer(original_url)
+        seek_buf = self._new_media_buffer(original_url)
         seek_buf.data = seeked_data
         seek_buf.total_size = len(seeked_data)
         seek_buf.content_type = buf.content_type
@@ -666,19 +689,19 @@ class DeviceServer:
                 log.warning("缓冲数量达到上限，所有缓冲都正在使用；暂时保留活跃缓冲")
                 break
             self._remove_buffer(oldest_id)
-        # 按内存上限清理
-        self._cleanup_by_memory()
+        # 按缓冲存储上限清理
+        self._cleanup_by_storage()
         if len(self._media_buffers) >= _MAX_BUFFERS:
             return False
-        # 未知文件大小按单文件上限预留，防止多个并发下载突破总内存预算。
+        # 未知文件大小按单文件上限预留，避免多个并发下载突破总缓冲预算。
         return self._reserved_buffer_memory() + _MAX_DOWNLOAD_SIZE <= self._max_buffer_memory
 
     def _reserved_buffer_memory(self) -> int:
-        """已完成缓冲按实际大小计，进行中的下载按单文件上限预留。"""
+        """已完成缓冲按实际存储量计，进行中的下载按单文件上限预留。"""
         return sum(
-            len(buf.data)
+            buf.downloaded_size
             if buf.download_complete or buf.error
-            else max(len(buf.data), _MAX_DOWNLOAD_SIZE)
+            else max(buf.downloaded_size, _MAX_DOWNLOAD_SIZE)
             for buf in self._media_buffers.values()
         )
 
@@ -697,23 +720,35 @@ class DeviceServer:
             for renderer in self.renderers.values()
         )
 
-    def _cleanup_by_memory(self):
-        """清理缓冲直到总内存用量低于上限"""
-        total_mem = sum(len(buf.data) for buf in self._media_buffers.values())
-        while total_mem > self._max_buffer_memory and self._media_buffers:
+    def _cleanup_by_storage(
+        self, required_extra: int = 0, protected_id: str | None = None
+    ) -> bool:
+        """清理闲置缓冲，确保当前存储量加预留空间不超过上限。"""
+        total_storage = sum(buf.downloaded_size for buf in self._media_buffers.values())
+        while total_storage + required_extra > self._max_buffer_memory and self._media_buffers:
             oldest_id = next(
-                (bid for bid in self._media_buffers if not self._buffer_is_in_use(bid)),
+                (
+                    bid for bid in self._media_buffers
+                    if bid != protected_id and not self._buffer_is_in_use(bid)
+                ),
                 None,
             )
             if oldest_id is None:
                 log.warning(
-                    "缓冲内存超过上限，但剩余缓冲都正在使用；保留播放流以避免中断"
+                    "缓冲存储达到上限，活跃缓冲无法回收；拒绝扩容以避免资源耗尽"
                 )
                 break
             buf = self._media_buffers.get(oldest_id)
-            freed = len(buf.data) if buf else 0
+            freed = buf.downloaded_size if buf else 0
             self._remove_buffer(oldest_id)
-            total_mem -= freed
+            total_storage -= freed
+        return total_storage + required_extra <= self._max_buffer_memory
+
+    def _cleanup_by_memory(
+        self, required_extra: int = 0, protected_id: str | None = None
+    ):
+        """兼容旧私有调用名；缓冲现在按磁盘存储预算回收。"""
+        return self._cleanup_by_storage(required_extra, protected_id)
 
     def _remove_buffer(self, buffer_id: str):
         """移除一个缓冲及其关联的 token 和时间戳"""
@@ -805,14 +840,14 @@ class DeviceServer:
                         if self._buffer_is_in_use(bid):
                             continue
                         self._remove_buffer(bid)
-                # 内存上限检查
-                self._cleanup_by_memory()
+                # 缓冲存储上限检查
+                self._cleanup_by_storage()
                 # 清理已完成的 background tasks
                 self._background_tasks = {t for t in self._background_tasks if not t.done()}
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
-            # 清理任务异常不得静默终止 (否则缓冲只增不减, 最终撑爆内存上限)
+            # 清理任务异常不得静默终止 (否则缓冲只增不减, 最终突破存储预算)
             log.error(f"缓冲清理任务异常退出: {e}", exc_info=True)
 
     def abort_proxy_for_renderer(self, udn: str):
@@ -913,8 +948,7 @@ class DeviceServer:
             log.error(f"音频缓冲未就绪: {buf.error}")
             return web.Response(status=502, text="Buffer Error")
 
-        data = buf.data
-        total_file_size = len(data)
+        total_file_size = buf.downloaded_size
         content_type = buf.content_type
 
         # base_offset 之后的 "虚拟" 内容
@@ -957,8 +991,14 @@ class DeviceServer:
             pos = actual_start
             end = actual_start + content_length
             while pos < end:
-                chunk_end = min(pos + 65536, end)
-                chunk = bytes(data[pos:chunk_end])
+                chunk_end = min(pos + 256 * 1024, end)
+                chunk = await asyncio.to_thread(
+                    buf.read_range, pos, chunk_end - pos
+                )
+                if not chunk:
+                    raise ConnectionError(
+                        f"缓冲文件读取提前结束 ({pos}/{end})"
+                    )
                 await response.write(chunk)
                 bytes_sent += len(chunk)
                 pos = chunk_end
@@ -1009,28 +1049,53 @@ class DeviceServer:
         
         try:
             import tempfile
-            
+
+            original_size = buf.downloaded_size
             # 写入临时输入文件（异步避免大文件写入阻塞事件循环）
-            with tempfile.NamedTemporaryFile(suffix='.input', delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                suffix=".input", dir=self._buffer_temp_dir, delete=False
+            ) as f:
                 input_path = f.name
-            await asyncio.to_thread(self._write_file, input_path, buf.data)
+            await asyncio.to_thread(buf.copy_to_file, input_path)
             output_path = input_path + '.wav'
-            
+
+            # 转码期间同时存在原缓冲、输入副本和输出文件。限制 FFmpeg 输出，
+            # 让这几份临时数据也计入缓冲预算，并保留文件系统安全余量。
+            buffered_bytes = sum(
+                candidate.downloaded_size
+                for candidate in self._media_buffers.values()
+            )
+            reserved_bytes = self._reserved_buffer_memory()
+            other_reserved = max(0, reserved_bytes - original_size)
+            storage_limit = min(
+                self._max_buffer_memory - other_reserved,
+                self._max_buffer_memory - buffered_bytes - original_size,
+            )
+            temp_root = os.path.dirname(input_path) or "."
+            try:
+                disk_limit = shutil.disk_usage(temp_root).free - 32 * 1024 * 1024
+            except OSError:
+                disk_limit = storage_limit
+            output_limit = min(storage_limit, disk_limit)
+            if output_limit <= 0:
+                log.warning("可用缓冲空间不足，跳过 WAV 转码")
+                return False
+
             ffmpeg_path = self._check_ffmpeg() or 'ffmpeg'
             cmd = [
                 ffmpeg_path, '-y',
                 '-hide_banner',
                 '-loglevel', 'error',
+                '-threads', '2',          # 限制解码并行度，避免小型主机被 FFmpeg 占满
                 '-i', input_path,
                 '-vn',                    # 禁用视频
                 '-codec:a', 'pcm_s16le',  # 16-bit PCM
                 '-ar', '44100',           # 44.1kHz 采样率
                 '-ac', '2',               # 立体声
-                '-threads', '0',          # 使用所有 CPU 核心
+                '-fs', str(output_limit), # 约束临时 WAV 文件的最大空间
                 output_path
             ]
-            
-            original_size = len(buf.data)
+
             log.info(f"WAV 转码开始: {buf.content_type} ({original_size} bytes)")
             
             process = await asyncio.create_subprocess_exec(
@@ -1060,22 +1125,52 @@ class DeviceServer:
                 stderr_str = stderr.decode('utf-8', errors='ignore') if stderr else ""
                 log.error(f"WAV 转码失败 (rc={process.returncode}): {stderr_str[:200]}")
                 return False
+
+            # ffmpeg 已结束，尽早释放输入副本，避免复制输出时多占一份磁盘空间。
+            try:
+                os.unlink(input_path)
+                input_path = None
+            except OSError:
+                pass
             
             # 读取转码结果
             if not os.path.isfile(output_path):
                 log.error("WAV 转码未产生输出文件")
                 return False
             
-            # 异步读取转码结果（避免大文件读取阻塞事件循环）
-            wav_data = await asyncio.to_thread(self._read_file, output_path)
-            
-            if not wav_data:
+            output_size = os.path.getsize(output_path)
+            if output_size <= 0:
                 log.error("WAV 转码输出文件为空")
                 return False
+            if output_size >= output_limit:
+                log.error(
+                    f"WAV 转码输出达到空间上限，拒绝使用可能不完整的文件: "
+                    f"{output_size}/{output_limit} bytes"
+                )
+                return False
+            os.chmod(output_path, 0o600)
+
+            buffer_id = next(
+                (bid for bid, candidate in self._media_buffers.items() if candidate is buf),
+                None,
+            )
+            required_extra = max(0, output_size - original_size)
+            if not self._cleanup_by_storage(required_extra, protected_id=buffer_id):
+                log.error(
+                    f"WAV 转码结果超出缓冲存储预算: {output_size} bytes"
+                )
+                return False
             
-            # 替换缓冲数据
-            buf.data = bytearray(wav_data)
-            buf.total_size = len(buf.data)
+            # 直接接管输出文件为缓冲存储，避免把大 WAV 读入内存或再复制一份。
+            replaced = await asyncio.to_thread(
+                buf.replace_from_file,
+                output_path,
+                max_size=self._max_buffer_memory,
+            )
+            if not replaced:
+                log.error(f"WAV 转码结果超出单缓冲上限: {output_size} bytes")
+                return False
+            output_path = None  # 所有权已转移给 MediaBuffer，cleanup 会删除文件。
             buf.content_type = "audio/wav"
             buf._converted = True
             
@@ -1098,18 +1193,6 @@ class DeviceServer:
                         pass
             buf._converting = False
             buf._convert_event.set()
-
-    @staticmethod
-    def _write_file(path: str, data: bytes | bytearray):
-        """写入文件（在线程池中执行，避免阻塞事件循环）"""
-        with open(path, 'wb') as f:
-            f.write(data)
-
-    @staticmethod
-    def _read_file(path: str) -> bytes:
-        """读取文件（在线程池中执行，避免阻塞事件循环）"""
-        with open(path, 'rb') as f:
-            return f.read()
 
     def _get_ffmpeg_input_format(self, content_type: str, remote_url: str = "") -> str:
         """根据Content-Type和URL获取ffmpeg输入格式"""
