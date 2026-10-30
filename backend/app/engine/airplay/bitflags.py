@@ -13,6 +13,8 @@ FEATURES = 0x1c340405fca00
    | Ft11AudioRedundant | Ft09AirPlayAudio）
 """
 
+from enum import IntFlag
+
 
 class FeatureFlags(IntFlag):
     # https://emanuelecozzi.net/docs/airplay2/features/
