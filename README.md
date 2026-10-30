@@ -16,7 +16,7 @@
 
 ---
 
-# 1. 💡 项目介绍
+# 💡 项目介绍
 
 MiAir Next 让小米小爱音箱化身 **DLNA 渲染器**、**AirPlay 接收器** 与 **Spotify Connect 设备**，并附带一个现代化的 Web 管理后台。
 
@@ -26,7 +26,7 @@ MiAir Next 让小米小爱音箱化身 **DLNA 渲染器**、**AirPlay 接收器*
 
 ---
 
-# 2. ✨ 功能特性
+# ✨ 功能特性
 
 支持将小爱音箱变为 **DLNA 渲染器**、**AirPlay 接收器** 与 **Spotify Connect 设备**，并提供小米云控制、触屏歌词/封面、Web 管理后台、通知推送、三态主题与热重启等能力。
 
@@ -36,7 +36,7 @@ MiAir Next 让小米小爱音箱化身 **DLNA 渲染器**、**AirPlay 接收器*
 
 ---
 
-# 3. 🚀 快速开始（Docker，推荐）
+# 🚀 快速开始（Docker，推荐）
 
 > ⚠️ **必须使用 host 网络**：DLNA/AirPlay 依赖组播发现，仅支持 **Linux 宿主机**。
 
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 
 ---
 
-# 4. 📦 依赖组件
+# 📦 依赖组件
 
 后端基于 **FastAPI**，前端为 **Vue 3 + Vite + Naive UI**，运行时依赖 `ffmpeg`、`pulseaudio` 等系统组件，以及按需下载的 **Spotify Soloist** 官方二进制。
 
@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 
 ---
 
-# 5. 📚 文档
+# 📚 文档
 
 | 文档 | 内容 |
 | --- | --- |
@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 
 ---
 
-# 6. ⚖️ 许可证与第三方
+# ⚖️ 许可证与第三方
 
 ## 📄 许可证
 
@@ -83,15 +83,18 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 | `engine/airplay/fairplay3.py`、`engine/airplay/dxxp.py` | systemcrash（OmgHax） | GPL-2.0 |
 | `engine/airplay/server.py`、`pairing/`、`connections/` | [airplay2-receiver](https://github.com/openairplay/airplay2-receiver)（简化改写） | Apache-2.0 |
 | `engine/airplay/airplay1.py` | Airport Express 公开密钥实现 | LGPL-2.0+ |
+| 内置二进制：Shairport Sync 5.5.2、NQPTP 1.2.8（AirPlay 2） | [shairport-sync](https://github.com/mikebrady/shairport-sync)、[nqptp](https://github.com/openairplay/nqptp) | GPL-2.0+ |
 | DLNA / 小米云引擎层 | [MiAir](https://github.com/KiriChen-Wind/MiAir)（移植） | MIT |
+
+完整逐组件来源说明见 [NOTICE](NOTICE)；各许可证全文链接亦列于该文件中。
 
 > 引擎同时包含 Apache-2.0 与 GPL 系代码，故整体按 GPL-3.0-or-later 分发（与同样内置 fairplay3 组件的 [Macast](https://github.com/xfangfang/Macast) 做法一致）。
 
 ---
 
-# 7. 🙏 致谢
+# 🙏 致谢
 
-协议层实现移植 [MiAir](https://github.com/KiriChen-Wind/MiAir)。
+DLNA / AirPlay / 小米云控制核心基于 [MiAir](https://github.com/KiriChen-Wind/MiAir)（MIT License © KiriChen-Wind）。
 
 部分实现参考 [songloft-plugin-miot](https://github.com/songloft-org/songloft-plugin-miot)。
 
@@ -99,19 +102,13 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 
 AirPlay 元数据解析参考 [shairport-sync-metadata-reader](https://github.com/mikebrady/shairport-sync-metadata-reader)。
 
+AirPlay 接收端核心实现基于 [airplay2-receiver](https://github.com/openairplay/airplay2-receiver)（其中 FairPlay/DXXP 等组件沿用原作者的 GPLv2/LGPL 协议声明，见对应源码文件头）。
+
 感谢 [LINUX DO](https://linux.do/) 社区。
 
 ---
 
-# 8. 👥 贡献者
-
-感谢所有为项目贡献代码、文档、创意和反馈的开发者！
-
-[![贡献者](https://contrib.rocks/image?repo=deerwan/miair-next)](https://github.com/deerwan/miair-next/graphs/contributors)
-
----
-
-# 9. ⭐ Star 趋势
+# ⭐ Star 趋势
 
 **如果这个项目对您有所帮助，欢迎点亮一个 Star ⭐，感谢您的支持！**
 

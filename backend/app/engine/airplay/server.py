@@ -1,7 +1,11 @@
 """AirPlay 接收服务主模块
 
-基于 airplay2-receiver 的核心逻辑，简化为仅接收音频并输出到 HTTP 流。
-支持 AirPlay 1 (RAOP) 协议。
+仅接收音频并输出到 HTTP 流。支持 AirPlay 1 (RAOP) 协议。
+
+本文件源自 openairplay/airplay2-receiver（Apache-2.0），已做简化改写：
+    Copyright 2016-2023 openairplay (https://github.com/openairplay/airplay2-receiver)
+
+完整第三方组件与许可证说明见仓库根目录的 NOTICE。
 """
 
 import asyncio
@@ -1622,11 +1626,10 @@ class AirPlayServer:
 
             # 重传状态: seq -> (首次请求 perf_counter 时间, 重试次数)
             _retransmit_state: dict[int, tuple[float, int]] = {}
-            # ---- 丢包恢复: shairport-sync 式三道闸门 (player.c 的
-            #      too_early / too_soon_after_last_request / too_late 思路) ----
+            # ---- 丢包恢复: 三道闸门 (too_early / too_soon_after_last_request / too_late) ----
             # 首见宽限: 缺口刚出现时不插静音——Wi-Fi 上几十毫秒的乱序/迟到
             # 占绝大多数, 立刻补静音会把本来无感的迟到变成可听见的卡顿
-            # (上游 airplay2-receiver 更是全程不插静音, 空档交给输出缓冲吸收)
+            # (空档交给输出缓冲吸收)
             _GAP_GRACE_TIME = 0.050        # 闸门1: 首见 50ms 内只等不动
             _RETRANSMIT_BASE_INTERVAL = 0.040
             _RETRANSMIT_MAX_INTERVAL = 0.320  # 重传请求限频上限 (原 1s 太久)

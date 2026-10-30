@@ -1,3 +1,4 @@
+"""源自 openairplay/airplay2-receiver（Apache-2.0）；完整说明见仓库根目录 NOTICE。"""
 
 
 class StreamConnection:

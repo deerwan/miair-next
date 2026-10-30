@@ -1,6 +1,6 @@
 """语音命令轮询模块
 
-采用 xiaomusic 的对话记录拉取逻辑，支持两种方式：
+支持两种对话记录拉取方式：
 1. 通过小爱 API 直接获取
 2. 通过 Mina 服务获取（适用于特定硬件）
 """
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("miair")
 
-# 关键词 -> 动作映射 (参照 xiaomusic 的 key_word_dict)
+# 关键词 -> 动作映射
 KEYWORD_ACTIONS: dict[str, str] = {
     "暂停": "pause",
     "停止": "stop",
@@ -44,7 +44,7 @@ KEYWORD_MATCH_ORDER: list[str] = sorted(KEYWORD_ACTIONS.keys(), key=len, reverse
 
 
 class ConversationPoller:
-    """对话记录轮询器，采用 xiaomusic 的实现方式"""
+    """对话记录轮询器"""
 
     def __init__(
         self,

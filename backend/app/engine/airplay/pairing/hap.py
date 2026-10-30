@@ -1,3 +1,9 @@
+"""HAP (HomeKit Accessory Protocol) 配对实现。
+
+源自 openairplay/airplay2-receiver 的 pairing 模块（Apache-2.0），
+亦受 HAP-Python (ikalchev/HAP-python) 启发；完整第三方组件与许可证说明
+见仓库根目录的 NOTICE。"""
+
 import struct
 import socket
 import threading
@@ -9,8 +15,6 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography import exceptions
 from cryptography.hazmat.primitives import serialization
-# import nacl.signing
-# from nacl.utils import random
 from Crypto.Cipher import ChaCha20_Poly1305  # PyCryptodome
 from ..utils import get_screen_logger
 

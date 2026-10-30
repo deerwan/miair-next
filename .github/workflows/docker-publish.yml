@@ -172,13 +172,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+            -f tag_name="${{ github.ref_name }}" \
+            -f target_commitish=main \
+            --jq '.body')
+          {
+            echo "NOTES<<EOF"
+            echo "$BODY"
+            echo ""
+            echo "## Docker"
+            echo ""
+            echo "镜像已发布到 Docker Hub，拉取命令："
+            echo ""
+            echo '```bash'
+            echo "docker pull ${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+            echo ""
+            echo "完整安装说明见 [README](README.md)。"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
-          body: |
-            Docker 镜像已发布到 Docker Hub (版本标签为去掉 v 前缀的语义化版本号, 如 v0.10.0 -> 0.10.0):
-
-            ```bash
-            docker pull ${{ env.IMAGE_NAME }}:latest
-            ```
+          body: ${{ steps.notes.outputs.NOTES }}

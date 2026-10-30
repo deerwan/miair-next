@@ -1,10 +1,9 @@
 """AirPlay 2 receiver backed by Shairport Sync.
 
-Shairport Sync and NQPTP handle the undocumented AirPlay 2 pairing,
-buffered-audio and PTP timing layers.  This adapter fixes their stdout backend
-to 48 kHz / signed 16-bit / stereo PCM and feeds it into MiAir's existing HTTP
-audio stream, so Xiaomi speakers can pull the result in the same way as the
-native AirPlay 1 receiver.
+Shairport Sync 与 NQPTP 处理未公开的 AirPlay 2 配对、缓冲音频与 PTP 时序层
+（二者均为 GPLv2 二进制，随容器镜像内置，见仓库根目录 NOTICE）。
+本适配器固定其 stdout 后端为 48 kHz / 有符号 16 位 / 立体声 PCM，并馈入 MiAir
+既有的 HTTP 音频流，使小米音箱能以与原生 AirPlay 1 接收器相同的方式拉流。
 """
 
 from __future__ import annotations

@@ -23,8 +23,7 @@ class Fairplay3():
         assert len(message3) == 164
         # 静默解密过程的调试输出。必须 try/finally 恢复 stdout:
         # 此函数会在 RTSP 会话内被调用, 若中途抛异常而 stdout 永久指向
-        # devnull, 整个进程的 print 全部失效且 fd 泄漏 (移植自上游的
-        # airplay2-receiver, 上游同样存在此问题)。
+        # devnull, 整个进程的 print 全部失效且 fd 泄漏。
         sys.stdout = open(os.devnull, 'w')
         try:
             return self._decrypt_aes_key_inner(message3, cipherText)

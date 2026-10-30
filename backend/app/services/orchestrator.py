@@ -1,6 +1,6 @@
 """服务编排器: 统一启停 DLNA / AirPlay / 小米云服务
 
-移植自 MiAir 的 app.py (MiAir 类), 去除 Web 层耦合:
+与 Web 层解耦:
 - 日志配置移至 core.logging
 - 进程重启移至 engine.restart
 - Web 服务由 FastAPI (main.py) 负责

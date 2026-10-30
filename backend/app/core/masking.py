@@ -1,4 +1,4 @@
-"""敏感信息脱敏工具 (cookie / 设备信息), 移植自 MiAir web/api.py"""
+"""敏感信息脱敏工具 (cookie / 设备信息)"""
 
 # passToken 在返回给前端时使用的完整脱敏占位符 (不是真实凭据)
 MASKED_TOKEN = "********"

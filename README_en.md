@@ -16,7 +16,7 @@
 
 ---
 
-# 1. 💡 Introduction
+# 💡 Introduction
 
 MiAir Next turns your Xiaomi XiaoAI speaker into a **DLNA renderer**, an **AirPlay receiver**, and a **Spotify Connect device**, and ships with a modern web admin dashboard.
 
@@ -26,7 +26,7 @@ Built on top of the protocol layer from [MiAir](https://github.com/KiriChen-Wind
 
 ---
 
-# 2. ✨ Features
+# ✨ Features
 
 Turn your XiaoAI speaker into a **DLNA renderer**, an **AirPlay receiver**, and a **Spotify Connect device**, plus Xiaomi Cloud control, on-screen lyrics/cover, a web admin dashboard, notifications, a tri-state theme, and hot-restart.
 
@@ -36,7 +36,7 @@ The standard image includes AirPlay 2 components. Install or update as usual, th
 
 ---
 
-# 3. 🚀 Quick Start (Docker, recommended)
+# 🚀 Quick Start (Docker, recommended)
 
 > ⚠️ **Host network is required**: DLNA/AirPlay rely on multicast discovery and only support **Linux hosts**.
 
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/deerwan/miair-next/main/install.sh 
 
 ---
 
-# 4. 📦 Dependencies
+# 📦 Dependencies
 
 The backend is **FastAPI**, the frontend is **Vue 3 + Vite + Naive UI**, and the runtime depends on system components such as `ffmpeg` and `pulseaudio`, plus the on-demand **Spotify Soloist** official binary.
 
@@ -56,7 +56,7 @@ The backend is **FastAPI**, the frontend is **Vue 3 + Vite + Naive UI**, and the
 
 ---
 
-# 5. 📚 Documentation
+# 📚 Documentation
 
 | Doc | Content |
 | --- | --- |
@@ -70,7 +70,7 @@ The backend is **FastAPI**, the frontend is **Vue 3 + Vite + Naive UI**, and the
 
 ---
 
-# 6. ⚖️ License & Third-Party
+# ⚖️ License & Third-Party
 
 ## 📄 License
 
@@ -83,15 +83,18 @@ The protocol engine includes / derives from the following third-party code, each
 | `engine/airplay/fairplay3.py`, `engine/airplay/dxxp.py` | systemcrash (OmgHax) | GPL-2.0 |
 | `engine/airplay/server.py`, `pairing/`, `connections/` | [airplay2-receiver](https://github.com/openairplay/airplay2-receiver) (simplified rewrite) | Apache-2.0 |
 | `engine/airplay/airplay1.py` | Airport Express public-key implementation | LGPL-2.0+ |
+| Bundled binaries: Shairport Sync 5.5.2, NQPTP 1.2.8 (AirPlay 2) | [shairport-sync](https://github.com/mikebrady/shairport-sync), [nqptp](https://github.com/openairplay/nqptp) | GPL-2.0+ |
 | DLNA / Xiaomi Cloud engine layer | [MiAir](https://github.com/KiriChen-Wind/MiAir) (ported) | MIT |
+
+See the [NOTICE](NOTICE) file for full per-component provenance; canonical links to each license text are listed there.
 
 > The engine mixes both Apache-2.0 and GPL-family code, so the whole is distributed under GPL-3.0-or-later (consistent with [Macast](https://github.com/xfangfang/Macast), which also bundles fairplay3).
 
 ---
 
-# 7. 🙏 Acknowledgements
+# 🙏 Acknowledgements
 
-The protocol layer is ported from [MiAir](https://github.com/KiriChen-Wind/MiAir).
+The DLNA / AirPlay / Xiaomi cloud control core is based on [KiriChen-Wind/MiAir](https://github.com/KiriChen-Wind/MiAir) (MIT License © KiriChen-Wind).
 
 Some implementations reference [songloft-plugin-miot](https://github.com/songloft-org/songloft-plugin-miot).
 
@@ -99,19 +102,13 @@ QR-code login references [xiaomusic](https://github.com/hanxi/xiaomusic).
 
 AirPlay metadata parsing references [shairport-sync-metadata-reader](https://github.com/mikebrady/shairport-sync-metadata-reader).
 
+The AirPlay receiver core is based on [airplay2-receiver](https://github.com/openairplay/airplay2-receiver) (FairPlay/DXXP components retain their original authors' GPLv2/LGPL notices in the source file headers).
+
 Thanks to the [LINUX DO](https://linux.do/) community.
 
 ---
 
-# 8. 👥 Contributors
-
-Thanks to everyone who has contributed code, docs, ideas, and feedback!
-
-[![Contributors](https://contrib.rocks/image?repo=deerwan/miair-next)](https://github.com/deerwan/miair-next/graphs/contributors)
-
----
-
-# 9. ⭐ Star History
+# ⭐ Star History
 
 **If this project helps you, please consider giving it a Star ⭐. Thank you for your support!**
 

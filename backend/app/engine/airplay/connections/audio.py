@@ -1,3 +1,6 @@
+"""本包各文件源自 openairplay/airplay2-receiver（Apache-2.0），已做简化改写；
+完整第三方组件与许可证说明见仓库根目录的 NOTICE。"""
+
 import socket
 import multiprocessing
 import enum

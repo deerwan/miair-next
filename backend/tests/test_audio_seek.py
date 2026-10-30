@@ -1,6 +1,5 @@
-"""音频格式检测 / seek 逻辑 / 日志编码测试 (移植自 MiAir tests/test_audio_seek.py)
+"""音频格式检测 / seek 逻辑 / 日志编码测试
 
-导入路径由 miair.dlna.device_server 调整为 app.engine.dlna.device_server。
 以 pytest 风格编写, 在 backend/ 目录下执行 `pytest` 即可收集。
 """
 

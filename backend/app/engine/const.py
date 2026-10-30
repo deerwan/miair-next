@@ -39,7 +39,6 @@ UPNP_ERROR_SEEK_MODE_NOT_SUPPORTED = 710
 
 # 需要使用 play_by_music_url 接口的设备型号
 # 含 LX04 等触屏型号，使 default_audio_id 指定的封面/歌词能在触屏音箱生效。
-# LX05A 补充自上游 MiAir。
 NEED_USE_PLAY_MUSIC_API = [
     "X08C",
     "X08E",

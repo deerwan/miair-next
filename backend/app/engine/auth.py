@@ -100,7 +100,6 @@ class AuthManager:
             )
         else:
             # 清空 cookie jar, 避免并发/失败后残留污染导致 Login failed
-            # (参考 xiaomusic auth.py 的 _patch_account)
             self.session.cookie_jar.clear()
 
         token_store = self.config.mi_token_home
@@ -208,9 +207,8 @@ class AuthManager:
                     ok = await self.account.login("micoapi")
                     if not ok:
                         # 同 session 登录失败, 可能是 session 状态损坏 / cookie jar 污染。
-                        # 参考 xiaomusic _try_fresh_session_and_relogin: 丢弃旧 session,
-                        # 用全新 session + 全新 MiAccount 重登一次, 避免"同一个损坏
-                        # session 无限重试导致连锁失败"。
+                        # 丢弃旧 session, 用全新 session + 全新 MiAccount 重登一次,
+                        # 避免"同一个损坏 session 无限重试导致连锁失败"。
                         ok = await self._relogin_with_fresh_session()
                     if ok:
                         self._mark_login_ok()
@@ -312,9 +310,8 @@ class AuthManager:
     async def _relogin_with_fresh_session(self) -> bool:
         """cookie 登录失败时, 丢弃可能损坏的 session, 用全新 session 重登一次
 
-        参考 xiaomusic auth.py 的 _try_fresh_session_and_relogin: 同一个 session
-        在并发登录 / 失败后可能残留损坏状态 (cookie jar 污染等), 继续用它重试
-        会连锁失败, 换全新 session 后通常能立即恢复。
+        同一个 session 在并发登录 / 失败后可能残留损坏状态 (cookie jar 污染等),
+        继续用它重试会连锁失败, 换全新 session 后通常能立即恢复。
         """
         try:
             old_session = self.session

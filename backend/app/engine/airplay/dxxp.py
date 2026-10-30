@@ -334,8 +334,7 @@ def parse_dmap(data: bytes) -> dict[str, list[bytes]]:
     """解析 DAAP/DMAP TLV 数据，返回 {4字符标签: [payload列表]}
 
     嵌套的 dict/list 类标签 (mdcl/mlit/msrv/mlcl) 会被递归展平。
-    标签语义参考 shairport-sync-metadata-reader:
-    minm=歌名, asar=歌手, asal=专辑。
+    标签语义: minm=歌名, asar=歌手, asal=专辑。
     """
     result: dict[str, list[bytes]] = {}
     _walk_dmap(data, result)

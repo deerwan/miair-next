@@ -1,9 +1,9 @@
+"""源自 openairplay/airplay2-receiver 的 SRP 模块（Apache-2.0），
+实现参考 pyhomekit (henridwyer/pyhomekit)；完整第三方组件与许可证说明
+见仓库根目录的 NOTICE。"""
+
 import random
 from hashlib import sha512
-
-#
-# Inspired from pyhomekit: https://github.com/henridwyer/pyhomekit
-#
 
 N_3072 = """FFFFFFFF FFFFFFFF C90FDAA2 2168C234 C4C6628B 80DC1CD1 29024E08
            8A67CC74 020BBEA6 3B139B22 514A0879 8E3404DD EF9519B3 CD3A431B

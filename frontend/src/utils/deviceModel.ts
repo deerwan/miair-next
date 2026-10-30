@@ -1,4 +1,4 @@
-// 小米音箱 hardware -> 型号名称 / 型号图片 映射 (移植自 MiAir index.html)
+// 小米音箱 hardware -> 型号名称 / 型号图片 映射
 // 图片位于 public/devicespic/*.webp, 通过 /devicespic/<image> 访问
 
 export interface DeviceModelInfo {

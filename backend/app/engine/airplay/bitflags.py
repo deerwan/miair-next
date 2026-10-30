@@ -1,58 +1,16 @@
-from enum import IntFlag
+"""AirPlay 2 功能标志位。
 
+源自 openairplay/airplay2-receiver（Apache-2.0）；完整第三方组件与许可证说明
+见仓库根目录的 NOTICE。
 
-"""
-# No Auth - coreutils, PairSetupMfi
-# MFi Verify fail error after pair-setup[2/5]
-FEATURES = 0x88340405f8a00
-# No Auth - HK and coreutils
-# Stops after pairing (setup [5/5] verify [2/2])with no supported auth error
-FEATURES = 0xc340405f8a00
-# No Auth = HK, coreutils, PairSetupMFi
-# MFi Verify fail error after pair-setup[2/5]
-FEATURES = 0x8c340405f8a00
-# Mfi Auth - HK and coreutils
-# All encrypt after pairing (setup [5/5] verify [2/2])
-FEATURES = 0xc340445f8a00
-# FairPlay - HK and coreutils
-# Stops after pairing (setup [5/5] verify [2/2])with no supported auth error
-FEATURES = 0xc340405fca00
-# FairPlay - HK and coreutils and transient
-# fp-setup after pair-setup[2/5]
+接收端默认启用:
 FEATURES = 0x1c340405fca00
-# MFi - HK and coreutils and transient
-# auth-setup after pair-setup[2/5]
-FEATURES = 0x1c340445f8a00
-# No Auth - No enc - PairSetupMFi
-# Works!!
-FEATURES = 0x8030040780a00
-# No Auth - No enc
-# No supported authentication types.
-# FEATURES = 0x30040780a00
-# FEATURES = 0x8030040780a00 | (1 << 27)
-
-FEATURES = 0x1c340405fca00
-
-# # FEATURES = 0x1c340405fca00 equals the below mask
-FEATURES = (
-    FeatureFlags.Ft48TransientPairing
-    | FeatureFlags.Ft47PeerManagement
-    | FeatureFlags.Ft46HomeKitPairing
-    | FeatureFlags.Ft41_PTPClock
-    | FeatureFlags.Ft40BufferedAudio
-    | FeatureFlags.Ft38ControlChannelEncrypt
-    | FeatureFlags.Ft30UnifiedAdvertisingInfo
-    | FeatureFlags.Ft22AudioUnencrypted
-    | FeatureFlags.Ft20ReceiveAudioAAC_LC
-    | FeatureFlags.Ft19ReceiveAudioALAC
-    | FeatureFlags.Ft18ReceiveAudioPCM
-    | FeatureFlags.Ft17AudioMetaTxtDAAP
-    | FeatureFlags.Ft16AudioMetaProgress
-    | FeatureFlags.Ft15AudioMetaCovers
-    | FeatureFlags.Ft14MFiSoft_FairPlay
-    | FeatureFlags.Ft11AudioRedundant
-    | FeatureFlags.Ft09AirPlayAudio
-)
+（= Ft48TransientPairing | Ft47PeerManagement | Ft46HomeKitPairing
+   | Ft41_PTPClock | Ft40BufferedAudio | Ft38ControlChannelEncrypt
+   | Ft30UnifiedAdvertisingInfo | Ft22AudioUnencrypted | Ft20ReceiveAudioAAC_LC
+   | Ft19ReceiveAudioALAC | Ft18ReceiveAudioPCM | Ft17AudioMetaTxtDAAP
+   | Ft16AudioMetaProgress | Ft15AudioMetaCovers | Ft14MFiSoft_FairPlay
+   | Ft11AudioRedundant | Ft09AirPlayAudio）
 """
 
 

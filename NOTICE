@@ -1,0 +1,96 @@
+MiAir Next
+
+MiAir Next is released under the GNU General Public License v3.0-or-later
+(see LICENSE). This distribution incorporates and is derived from third-party
+components, each of which is redistributed under its own license. This file
+records the provenance of those components so that the copyright, patent,
+trademark and attribution notices required by their licenses (notably
+Apache-2.0 §4 and GPL §7) are retained.
+
+---
+
+1. AirPlay 1 receiver (RAOP / FairPlay, public Airport Express key)
+   Files:
+     backend/app/engine/airplay/airplay1.py
+   Provenance:
+     "airplay" client library — Copyright (C) 2012 skaman (SIFTeam).
+   License: GNU Lesser General Public License, version 2.1 or later (LGPL-2.1+).
+
+2. FairPlay 3 and Dxxp (DAAP) protocol
+   Files:
+     backend/app/engine/airplay/fairplay3.py
+     backend/app/engine/airplay/dxxp.py
+     backend/app/engine/airplay/sdphandler.py (SDP audio-format enum)
+   Provenance:
+     Python implementation by "systemcrash" (2021/2022), part of the
+     decompiled/ported OmgHax (libsystemairplay / FairPlay) work; original
+     C implementation credited to OmgHax and Foxsen.
+   License: GNU General Public License, version 2.0 (GPL-2.0).
+
+3. AirPlay 2 receiver, pairing and streaming layers
+   Files:
+     backend/app/engine/airplay/server.py
+     backend/app/engine/airplay/bitflags.py
+     backend/app/engine/airplay/pairing/hap.py
+     backend/app/engine/airplay/pairing/srp.py
+     backend/app/engine/airplay/connections/*.py
+   Provenance:
+     Derived from openairplay "airplay2-receiver" (https://github.com/openairplay
+     /airplay2-receiver). HAP (homekit-pairing) code also inspired by
+     HAP-Python (https://github.com/ikalchev/HAP-python); SRP server code
+     inspired by pyhomekit (https://github.com/henridwyer/pyhomekit).
+   License: Apache License 2.0.
+
+4. DLNA / Xiaomi-cloud control engine
+   Files:
+     backend/app/engine/dlna/*.py
+     backend/app/engine/mi_account.py
+     backend/app/engine/mina_auth.py
+     backend/app/engine/conversation.py
+     backend/app/engine/speaker.py
+   Provenance:
+     Ported from MiAir (https://github.com/KiriChen-Wind/MiAir).
+     QR-code login flow references xiaomusic (https://github.com/hanxi/xiaomusic);
+     some playback logic references songloft-plugin-miot.
+   License: MIT (MiAir).
+
+5. AirPlay 2 bundled binaries
+   The standard container image bundles prebuilt Shairport Sync 5.5.2
+   (https://github.com/mikebrady/shairport-sync) and NQPTP 1.2.8
+   (https://github.com/openairplay/nqptp), which handle AirPlay 2 pairing,
+   buffered audio and PTP timing.
+   License: GNU General Public License, version 2.0-or-later (Shairport Sync);
+   NQPTP is a GPLv2 PTP daemon.
+
+6. AirPlay metadata reference
+   Files:
+     backend/app/engine/airplay/shairport_metadata.py
+   Provenance:
+   Reference implementation based on shairport-sync-metadata-reader
+   (https://github.com/mikebrady/shairport-sync-metadata-reader).
+
+---
+
+License texts
+
+This project distributes a combination of GPL and non-GPL code, so the whole
+is released under GPL-3.0-or-later (the root `LICENSE` file; consistent with
+projects that also bundle the FairPlay 3 component, e.g. Macast).
+
+The full texts of each license referenced above are available from their
+canonical sources:
+
+  Apache License 2.0        https://www.apache.org/licenses/LICENSE-2.0
+                           (airplay2-receiver-derived components;
+                           retained with notices per Apache-2.0 §4)
+  GNU GPL v2                https://www.gnu.org/licenses/gpl-2.0.txt
+                           (FairPlay 3 / Dxxp, systemcrash/OmgHax)
+  GNU Lesser GPL v2.1      https://www.gnu.org/licenses/lgpl-2.1.txt
+                           (AirPlay 1 RAOP / Airport Express public-key
+                           component, skaman/SIFTeam)
+  MIT                     https://opensource.org/license/mit
+                           (MiAir — DLNA / Xiaomi-cloud engine layer)
+
+The in-file attribution notices added to the Apache-2.0-derived AirPlay
+source files, together with this file, satisfy the attribution and notice
+requirements of Apache-2.0 §4 and MIT §3.

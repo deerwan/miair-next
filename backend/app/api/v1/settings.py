@@ -1,4 +1,4 @@
-"""系统设置 (移植自 MiAir handle_get_setting / handle_save_setting)
+"""系统设置
 
 改进: 保存设置后不再重启整个进程, 而是热重启 DLNA/AirPlay 子服务。
 """

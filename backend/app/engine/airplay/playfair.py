@@ -1,3 +1,9 @@
+"""AirPlay 1 (RAOP) FairPlay AES 密钥交换。
+
+内嵌的 Airport Express 公开 RSA 密钥随 airplay1 组件分发（LGPL-2.0+，
+Copyright (C) 2012 skaman/SIFTeam）；完整第三方组件与许可证说明见
+仓库根目录的 NOTICE。"""
+
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
 import base64

@@ -51,8 +51,8 @@ class SpeakerAirPlay:
         """动态读取当前 AirPlay 广播名。
 
         设备名应始终跟随 dlna_name（用户可在 Web 后台修改），
-        而非在构造时冻结。借鉴 airplay2-receiver 的 update_service 思路：
-        名称是广播的属性，可在运行时被刷新后重新注册生效。
+        而非在构造时冻结。名称是广播的属性，
+        可在运行时被刷新后重新注册生效。
         """
         return self.speaker.get_dlna_name()
 
@@ -292,8 +292,8 @@ class SpeakerAirPlay:
         - 未搜过的标题搜曲库（精确匹配，歌词行不会误命中）；
         - minm 是歌词行的发送端（如 Apple Music 真歌名拼在 artist 里），
           额外尝试 derived 候选（从 artist 提取）；
-        - derived 候选按 songloft 的方式允许模糊回退首条结果（曲库无
-          原版时至少能显示翻唱版的歌词，如周杰伦版权不在小米曲库）；
+        - derived 候选允许模糊回退首条结果（曲库无原版时至少能显示
+          翻唱版的歌词，如周杰伦版权不在小米曲库）；
           minm 标题保持严格，否则滚动歌词行每行都会"命中"不同的歌，
           导致反复重发播放指令；
         - 已命中过的歌名缓存在 matched，切回上一首时发送端重发旧歌名，
@@ -341,7 +341,7 @@ class SpeakerAirPlay:
                             audio_id = await asyncio.wait_for(
                                 self.controller.search_audio_id(
                                     cand, meta.get("artist", ""),
-                                    # derived 是真歌名，按 songloft 方式允许回退首条；
+                                    # derived 是真歌名，允许回退首条；
                                     # minm 可能是歌词行，模糊命中会误判切歌，保持严格
                                     fuzzy_fallback=(bool(derived) and cand == derived)),
                                 timeout=5.0,
