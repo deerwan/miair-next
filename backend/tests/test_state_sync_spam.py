@@ -84,3 +84,22 @@ def test_stop_transition_when_guard_inactive_still_works():
         assert r._stuck_paused_since > 0
 
     asyncio.run(run())
+
+
+def test_idle_status_does_not_flip_state():
+    """只有 data.code 没有 info 的空闲响应不应把 PLAYING 改成 STOPPED
+
+    回归: 空闲音箱状态查询返回 {"idle": True, "status": 0},
+    轮询若照常同步会把正在播放的渲染器翻成 STOPPED。
+    """
+
+    async def run():
+        ds = _make_ds()
+        r = _FakeRenderer()  # PLAYING
+        await ds._sync_renderer_state(
+            "udn", r, {"status": 0, "idle": True, "volume": 30}
+        )
+        assert r.transport_state == TRANSPORT_STATE_PLAYING
+        assert r.notify_calls == 0
+
+    asyncio.run(run())

@@ -1515,6 +1515,10 @@ class DeviceServer:
         self, udn: str, renderer: DLNARenderer, status: dict
     ):
         """同步单个渲染器状态"""
+        if status.get("idle"):
+            # 设备空闲（无 info）只说明当前没有播放，不代表状态变化；
+            # 直接返回，避免把 PLAYING 误判为 STOPPED 触发续播逻辑。
+            return
         speaker_status = status.get("status", 0)
         new_state = {
             0: TRANSPORT_STATE_STOPPED,
