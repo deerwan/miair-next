@@ -159,13 +159,10 @@ class SpeakerAirPlay:
                 " 请通过环境变量 MIAIR_HOSTNAME=<本机局域网IP> 指定正确地址。"
             )
         if self._loop and self._loop.is_running():
-            if self.airplay2:
-                with self._command_revision_lock:
-                    self._command_revision += 1
-                    revision = self._command_revision
-                command = self._apply_airplay2_command(revision, stream_url)
-            else:
-                command = self._play_on_speaker(stream_url)
+            with self._command_revision_lock:
+                self._command_revision += 1
+                revision = self._command_revision
+            command = self._apply_airplay2_command(revision, stream_url)
             self._submit_command(command)
         else:
             log.warning(f"AirPlay: 事件循环未运行，无法播放到 {self.device_name}")
@@ -174,6 +171,10 @@ class SpeakerAirPlay:
         """Serialize MiNA calls; cancellation cannot undo a cloud command."""
         async with self._command_lock:
             if revision != self._command_revision:
+                log.info(
+                    f"{self.device_name}: 跳过过期指令 "
+                    f"revision={revision} 当前={self._command_revision}"
+                )
                 return
             if stream_url is None:
                 await self._stop_speaker()
@@ -422,13 +423,10 @@ class SpeakerAirPlay:
         """
         log.info(f"AirPlay 停止播放到 {self.device_name}")
         if self._loop and self._loop.is_running():
-            if self.airplay2:
-                with self._command_revision_lock:
-                    self._command_revision += 1
-                    revision = self._command_revision
-                command = self._apply_airplay2_command(revision, None)
-            else:
-                command = self._stop_speaker()
+            with self._command_revision_lock:
+                self._command_revision += 1
+                revision = self._command_revision
+            command = self._apply_airplay2_command(revision, None)
             self._submit_command(command)
         else:
             log.warning(f"AirPlay: 事件循环未运行，无法停止 {self.device_name}")
