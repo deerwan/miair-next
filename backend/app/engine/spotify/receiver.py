@@ -626,6 +626,9 @@ class SpotifyReceiver:
                 state = await asyncio.wait_for(self.controller.get_status(), timeout=10)
             except Exception:  # noqa: BLE001
                 return False
+            if state.get("idle"):
+                # 空闲状态无法作为"被打断"的证据
+                return False
             if int(state.get("status") or 0) == 1:
                 return False
             if attempt == 0:

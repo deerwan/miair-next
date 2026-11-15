@@ -262,7 +262,11 @@ class SpeakerController:
                 lambda: self.auth.mina_service.player_get_status(self.device_id),
                 label="get_volume",
             )
-            info = json.loads(status.get("data", {}).get("info", "{}"))
+            info_str = status.get("data", {}).get("info")
+            if not info_str:
+                # 空闲状态没有 info，沿用上次音量
+                return self._last_volume
+            info = json.loads(info_str)
             volume = int(info.get("volume", 0))
             if volume > 0:
                 self._last_volume = volume
@@ -293,8 +297,16 @@ class SpeakerController:
             data = playing_info.get("data", {})
             info_str = data.get("info")
             if not info_str:
-                # 如果没有 info 字段，可能也是某种异常状态，但不代表停止
-                raise Exception(f"Mina API response missing 'info': {playing_info}")
+                # 设备未加载任何媒体时只返回 {"data": {"code": 0}}，不含 info。
+                # 注意"没有播放"不等于"没有 info"：暂停态（status=2）仍带 info，
+                # 那种情况走下面正常分支。缺 info 是正常状态而不是 API 错误：
+                # 用 idle 标记返回，调用方可据此区分"设备空闲"与"请求失败"，
+                # 避免把在线音箱误判为离线。
+                return {
+                    "status": 0,
+                    "volume": int(self._last_volume or 0),
+                    "idle": True,
+                }
 
             info = json.loads(info_str)
             # 获取成功，重置连续登录失败计数
