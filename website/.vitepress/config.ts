@@ -12,14 +12,14 @@ const vueRuntime = pkgRequire.resolve('vue/dist/vue.runtime.esm-bundler.js')
 const vueServerRenderer = pkgRequire.resolve('vue/server-renderer')
 
 // 文档复用仓库内 docs/ 目录（README 中的相对链接不受影响），
-// 首页 landing 位于 docs/index.md，静态资源在 website/public/。
+// 首页 landing 位于 docs/index.md，静态资源在 docs/public/（含 CNAME）。
 export default defineConfig({
   lang: 'zh-CN',
   title: 'MiAir Next',
   description:
     '让小米小爱音箱化身 DLNA 渲染器、AirPlay 接收器与 Spotify Connect 设备，附带现代化 Web 管理后台，一条命令部署。',
-  // GitHub Pages 项目页路径 (deerwan.github.io/miair-next/)
-  base: '/miair-next/',
+  // 站点绑定自定义子域名 (docs/public/CNAME), 子域名即站点根
+  base: '/',
   srcDir: '../docs',
   // publicDir 采用默认约定: srcDir/public (即 docs/public/)
   // srcDir 在网站目录之外, 而 Vite 默认 root = srcDir, 会导致
@@ -39,7 +39,7 @@ export default defineConfig({
     // 仓库根目录相对链接（README 引用）在站点内不存在, 不校验
     /^\/(CHANGELOG|LICENSE|NOTICE|img|README)/
   ],
-  head: [['link', { rel: 'icon', type: 'image/png', href: '/miair-next/favicon.png' }]],
+  head: [['link', { rel: 'icon', type: 'image/png', href: '/favicon.png' }]],
   themeConfig: {
     logo: '/favicon.png',
     nav: [
