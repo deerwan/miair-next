@@ -1,0 +1,37 @@
+/* 品牌色对齐管理后台 (Naive UI primary #18a058, 暗色 #63e2b7) */
+:root {
+  --vp-c-brand-1: #18a058;
+  --vp-c-brand-2: #36ad6a;
+  --vp-c-brand-3: #18a058;
+  --vp-c-brand-soft: rgba(24, 160, 88, 0.14);
+}
+
+.dark {
+  --vp-c-brand-1: #63e2b7;
+  --vp-c-brand-2: #7fe7c4;
+  --vp-c-brand-3: #63e2b7;
+  --vp-c-brand-soft: rgba(99, 226, 183, 0.14);
+}
+
+/* 首页 hero 渐变跟随品牌色 */
+:root {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #18a058, #63e2b7);
+}
+
+/* 首页截图展示 (markdown 图片语法, base 前缀由 VitePress 自动处理) */
+img[src*='preview.png'] {
+  display: block;
+  max-width: 100%;
+  margin: 16px auto;
+  border-radius: 12px;
+  border: 1px solid var(--vp-c-divider);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+/* Star 趋势图自适应宽度 */
+.VPContent img[src*='star-history'] {
+  max-width: 100%;
+  display: block;
+  margin: 16px auto;
+}

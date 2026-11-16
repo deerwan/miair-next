@@ -1,0 +1,18 @@
+{
+  "name": "miair-next-website",
+  "private": true,
+  "type": "module",
+  "version": "0.10.1",
+  "description": "MiAir Next official website (VitePress)",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

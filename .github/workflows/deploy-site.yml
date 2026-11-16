@@ -1,0 +1,46 @@
+name: Deploy Site
+
+# 官网 (VitePress) 构建并发布到 GitHub Pages: deerwan.github.io/miair-next/
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'website/**'
+      - 'docs/**'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    if: github.repository == 'deerwan/miair-next'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # lastUpdated 依赖 git 提交时间
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: website/.vitepress/dist
