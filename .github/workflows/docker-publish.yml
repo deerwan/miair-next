@@ -9,6 +9,7 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - 'website/**'
       - '.gitignore'
       - 'img/**'
   # PR 触发: 跑测试和不发布的镜像构建; 发布任务由 if 守卫跳过
