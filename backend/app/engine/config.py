@@ -21,6 +21,7 @@ _SENSITIVE_FIELDS = (
     "spotify_api_key",
     "notify_feishu_secret",
     "notify_wxpusher_spt",
+    "notify_tg_bot_token",
 )
 
 
@@ -124,11 +125,15 @@ class Config:
     # serviceToken 过期时间戳(秒), 0 表示未知/未续期
     token_expires_at: float = 0.0
     voice_poll_interval: int = 1
-    # 通知推送 (登录过期/失败提醒): notify_type 单选 (""=关闭 / feishu / wxpusher)
+    # 通知推送 (登录过期/失败提醒): notify_type 单选 (""=关闭 / feishu / wxpusher / telegram)
     notify_type: str = ""
     notify_feishu_webhook: str = ""
     notify_feishu_secret: str = ""
     notify_wxpusher_spt: str = ""
+    # telegram: 自建反代地址 (空=官方 api.telegram.org), Bot Token, 目标 chat id
+    notify_tg_api_base: str = ""
+    notify_tg_bot_token: str = ""
+    notify_tg_chat_id: str = ""
     spotify_enabled: bool = False
     spotify_device_name: str = ""
     spotify_did: str = ""

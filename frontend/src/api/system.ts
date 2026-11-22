@@ -39,6 +39,9 @@ export interface Settings {
   notify_feishu_webhook: string
   notify_feishu_secret: string
   notify_wxpusher_spt: string
+  notify_tg_api_base: string
+  notify_tg_bot_token: string
+  notify_tg_chat_id: string
   spotify_enabled: boolean
   spotify_device_name: string
   spotify_did: string

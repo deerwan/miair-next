@@ -6,7 +6,7 @@
           <n-input v-model:value="username" placeholder="默认 admin" />
         </n-form-item>
         <n-form-item label="设置密码">
-          <n-input v-model:value="password" type="password" show-password-on="click" placeholder="至少 6 位" />
+          <n-input v-model:value="password" type="password" show-password-on="click" placeholder="至少 8 位, 需含字母和数字" />
         </n-form-item>
         <n-form-item label="确认密码">
           <n-input v-model:value="confirm" type="password" show-password-on="click" placeholder="再次输入" />

@@ -5,7 +5,7 @@
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app import __version__
 from app.api.deps import get_engine_config, get_orchestrator
@@ -61,6 +61,9 @@ async def get_settings_api(
         "notify_feishu_webhook": mask_secret(config.notify_feishu_webhook),
         "notify_feishu_secret": mask_secret(config.notify_feishu_secret),
         "notify_wxpusher_spt": mask_secret(config.notify_wxpusher_spt),
+        "notify_tg_api_base": config.notify_tg_api_base,
+        "notify_tg_bot_token": mask_secret(config.notify_tg_bot_token),
+        "notify_tg_chat_id": config.notify_tg_chat_id,
         "need_use_play_music_api": NEED_USE_PLAY_MUSIC_API,
         "default_audio_id": config.default_audio_id,
         "touchscreen_lyrics": config.touchscreen_lyrics,
@@ -99,6 +102,14 @@ async def save_settings_api(
     config=Depends(get_engine_config),
 ):
     """保存设置并热重启 DLNA/AirPlay 服务"""
+    # 自建tg反代地址格式校验 (在任何配置变更前完成, 校验失败不落任何变更)
+    if payload.notify_tg_api_base is not None:
+        api_base = payload.notify_tg_api_base.strip()
+        if api_base and not api_base.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=400,
+                detail="自建tg反代地址必须以 http:// 或 https:// 开头",
+            )
     if payload.account is not None:
         config.account = payload.account
     if payload.password is not None:
@@ -152,6 +163,15 @@ async def save_settings_api(
         config.notify_wxpusher_spt = unmask_secret(
             payload.notify_wxpusher_spt.strip(), config.notify_wxpusher_spt
         )
+    if payload.notify_tg_api_base is not None:
+        config.notify_tg_api_base = payload.notify_tg_api_base.strip().rstrip("/")
+    if payload.notify_tg_bot_token is not None:
+        # 回写的是脱敏占位符 (未修改) 时保留已存储的真实 Token
+        config.notify_tg_bot_token = unmask_secret(
+            payload.notify_tg_bot_token.strip(), config.notify_tg_bot_token
+        )
+    if payload.notify_tg_chat_id is not None:
+        config.notify_tg_chat_id = payload.notify_tg_chat_id.strip()
     if payload.spotify_enabled is not None:
         config.spotify_enabled = payload.spotify_enabled
     if payload.spotify_device_name is not None:

@@ -30,16 +30,24 @@ def sent(monkeypatch):
         calls.append(("wxpusher", spt, title, content))
         return True
 
+    async def fake_telegram(session, api_base, token, chat_id, title, content):
+        calls.append(("telegram", api_base, token, chat_id, title, content))
+        return True
+
     monkeypatch.setattr(notify, "_send_feishu", fake_feishu)
     monkeypatch.setattr(notify, "_send_wxpusher", fake_wxpusher)
+    monkeypatch.setattr(notify, "_send_telegram", fake_telegram)
     return calls
 
 
-def _make_config(ntype="", feishu="", spt=""):
+def _make_config(ntype="", feishu="", spt="", tg_api_base="", tg_token="", tg_chat_id=""):
     config = Config(conf_path="/tmp/miair-test-notify")
     config.notify_type = ntype
     config.notify_feishu_webhook = feishu
     config.notify_wxpusher_spt = spt
+    config.notify_tg_api_base = tg_api_base
+    config.notify_tg_bot_token = tg_token
+    config.notify_tg_chat_id = tg_chat_id
     return config
 
 
@@ -113,6 +121,110 @@ def test_wxpusher_channel(sent):
     assert sent[0][0] == "wxpusher"
 
 
+def test_telegram_channel(sent):
+    """Telegram 方式只走 Telegram 渠道, 透传反代地址/Token/chat_id"""
+    config = _make_config(
+        ntype="telegram", tg_api_base="https://tg.example.workers.dev", tg_token="TOK", tg_chat_id="123"
+    )
+    result = asyncio.run(notify.send_notification(config, "login_expired", "标题", "内容"))
+    assert result == {"telegram": True}
+    assert len(sent) == 1
+    assert sent[0][0] == "telegram"
+    assert sent[0][1] == "https://tg.example.workers.dev"
+    assert sent[0][2] == "TOK"
+    assert sent[0][3] == "123"
+
+
+def test_telegram_without_credentials_skipped(sent):
+    """Telegram 渠道 Token 或 chat_id 任一为空时不推送"""
+    config = _make_config(ntype="telegram", tg_token="TOK")
+    assert asyncio.run(notify.send_notification(config, "e", "t", "c")) == {}
+    config = _make_config(ntype="telegram", tg_chat_id="123")
+    assert asyncio.run(notify.send_notification(config, "e", "t", "c")) == {}
+    assert sent == []
+
+
+def test_normalize_tg_api_base():
+    """反代地址归一化: 空/纯空白回退官方 API, 去尾部斜杠, 保留自定义路径前缀"""
+    assert notify._normalize_tg_api_base("") == notify.TG_DEFAULT_API_BASE
+    assert notify._normalize_tg_api_base("   ") == notify.TG_DEFAULT_API_BASE
+    assert notify._normalize_tg_api_base("https://tg.example.com/") == "https://tg.example.com"
+    assert (
+        notify._normalize_tg_api_base("https://tg.example.com/tg-proxy")
+        == "https://tg.example.com/tg-proxy"
+    )
+
+
+class _FakeResponse:
+    def __init__(self, status=200, payload=None):
+        self.status = status
+        self._payload = payload if payload is not None else {"ok": True}
+
+    async def json(self, content_type=None):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, response=None, exc=None):
+        self.calls = []
+        self._response = response if response is not None else _FakeResponse()
+        self._exc = exc
+
+    def post(self, url, json=None):
+        self.calls.append({"url": url, "json": json})
+        if self._exc is not None:
+            raise self._exc
+        return self._response
+
+
+def test_send_telegram_success():
+    """成功: 请求打到官方 API, 消息体为纯文本且禁用链接预览"""
+    session = _FakeSession()
+    ok = asyncio.run(notify._send_telegram(session, "", "TOK", "123", "标题", "内容"))
+    assert ok is True
+    call = session.calls[0]
+    assert call["url"] == "https://api.telegram.org/botTOK/sendMessage"
+    assert call["json"] == {
+        "chat_id": "123",
+        "text": "标题\n内容",
+        "disable_web_page_preview": True,
+    }
+
+
+def test_send_telegram_custom_api_base():
+    """自建反代: 拼接在反代地址后, 去尾部斜杠"""
+    session = _FakeSession()
+    ok = asyncio.run(
+        notify._send_telegram(session, "https://tg.example.com/", "TOK", "123", "t", "c")
+    )
+    assert ok is True
+    assert session.calls[0]["url"] == "https://tg.example.com/botTOK/sendMessage"
+
+
+def test_send_telegram_api_rejected():
+    """HTTP 200 但业务 ok=false (如 Token 无效) 视为失败"""
+    session = _FakeSession(_FakeResponse(payload={"ok": False, "description": "Unauthorized"}))
+    assert asyncio.run(notify._send_telegram(session, "", "bad", "1", "t", "c")) is False
+
+
+def test_send_telegram_http_error():
+    """非 2xx 状态码视为失败"""
+    session = _FakeSession(_FakeResponse(status=502))
+    assert asyncio.run(notify._send_telegram(session, "", "TOK", "1", "t", "c")) is False
+
+
+def test_send_telegram_exception():
+    """网络异常 (如反代不可达) 视为失败, 不抛出"""
+    session = _FakeSession(exc=RuntimeError("proxy unreachable"))
+    assert asyncio.run(notify._send_telegram(session, "", "TOK", "1", "t", "c")) is False
+
+
 def test_throttle_same_event(sent):
     """同一事件在节流窗口内只推一次, 不同事件互不影响"""
     config = _make_config(ntype="wxpusher", spt="SPT_xxx")
@@ -162,6 +274,15 @@ def test_mask_secret():
     assert mask_secret("") == ""
     assert mask_secret("abc") == MASKED_TOKEN
     assert mask_secret("SPT_1234567890") == MASKED_TOKEN + "890"
+
+
+def test_mask_tg_bot_token_roundtrip():
+    """Telegram Bot Token 脱敏往返: 掩码回写还原真实值, 新值直接保存"""
+    real = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    masked = mask_secret(real)
+    assert "ABC-DEF" not in masked
+    assert unmask_secret(masked, real) == real
+    assert unmask_secret("999999:NEW-TOKEN", real) == "999999:NEW-TOKEN"
 
 
 def test_unmask_secret():

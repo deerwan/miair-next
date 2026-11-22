@@ -318,6 +318,44 @@
                     />
                   </div>
                 </n-form-item>
+                <n-form-item v-if="form.notify_type === 'telegram'" label="自建tg反代 (可选)">
+                  <div class="field-with-tip">
+                    <n-input
+                      v-model:value="form.notify_tg_api_base"
+                      placeholder="你的 Telegram 自建反代"
+                      clearable
+                    />
+                    <n-text depth="3" class="field-tip">
+                      留空使用官方 API; 国内网络不可达时可自建反代, 参考:
+                      <n-a href="https://github.com/deerwan/tgbot-proxy" target="_blank" rel="noopener">tgbot-proxy ↗</n-a>
+                    </n-text>
+                  </div>
+                </n-form-item>
+                <n-form-item v-if="form.notify_type === 'telegram'" label="Bot Token">
+                  <div class="field-with-tip">
+                    <n-input
+                      v-model:value="form.notify_tg_bot_token"
+                      placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                      clearable
+                    />
+                    <n-text depth="3" class="field-tip">
+                      与 @BotFather 对话发送 /newbot 创建机器人后获得
+                    </n-text>
+                  </div>
+                </n-form-item>
+                <n-form-item v-if="form.notify_type === 'telegram'" label="Chat ID">
+                  <div class="field-with-tip">
+                    <n-input
+                      v-model:value="form.notify_tg_chat_id"
+                      placeholder="如 123456789, 群组为 -1001234567890"
+                      clearable
+                    />
+                    <n-text depth="3" class="field-tip">
+                      先给机器人发送一条消息, 再用浏览器打开
+                      https://api.telegram.org/bot&lt;你的Token&gt;/getUpdates 查看 chat.id
+                    </n-text>
+                  </div>
+                </n-form-item>
                 <n-form-item v-if="form.notify_type" label=" " :show-label="!isMobile">
                   <n-button size="small" :loading="testingNotify" @click="doTestNotify">发送测试消息</n-button>
                 </n-form-item>
@@ -424,7 +462,7 @@ import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NSpace, NFlex, NCard, NForm, NFormItem, NSwitch, NInputNumber, NInput, NSelect, NButton, NSpin,
-  NPopconfirm, NDescriptions, NDescriptionsItem, NAlert, NText, NTabs, NTabPane, NImage,
+  NPopconfirm, NDescriptions, NDescriptionsItem, NAlert, NText, NTabs, NTabPane, NImage, NA,
   NDataTable, NEmpty, NTag, NRadioGroup, NRadioButton, useMessage, type DataTableColumns,
   type SelectOption,
 } from 'naive-ui'
@@ -526,6 +564,9 @@ const form = reactive({
   notify_feishu_webhook: '',
   notify_feishu_secret: '',
   notify_wxpusher_spt: '',
+  notify_tg_api_base: '',
+  notify_tg_bot_token: '',
+  notify_tg_chat_id: '',
   spotify_enabled: false,
   spotify_device_name: '',
   spotify_did: '',
@@ -572,6 +613,7 @@ const notifyTypeOptions = [
   { label: '关闭', value: '' },
   { label: '飞书机器人', value: 'feishu' },
   { label: 'WxPusher 极简推送', value: 'wxpusher' },
+  { label: 'Telegram', value: 'telegram' },
 ]
 
 // 预设小米云封面 (audioID: 曲库歌曲 ID, cover: 预览图 CDN)
@@ -650,6 +692,9 @@ async function load() {
     form.notify_feishu_webhook = s.notify_feishu_webhook
     form.notify_feishu_secret = s.notify_feishu_secret
     form.notify_wxpusher_spt = s.notify_wxpusher_spt
+    form.notify_tg_api_base = s.notify_tg_api_base || ''
+    form.notify_tg_bot_token = s.notify_tg_bot_token || ''
+    form.notify_tg_chat_id = s.notify_tg_chat_id || ''
     form.spotify_enabled = s.spotify_enabled ?? false
     form.spotify_device_name = s.spotify_device_name || ''
     form.spotify_did = s.spotify_did || ''

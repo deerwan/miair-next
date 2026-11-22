@@ -11,7 +11,7 @@
         <n-input v-model:value="oldPwd" type="password" show-password-on="click" placeholder="请输入原密码" />
       </n-form-item>
       <n-form-item label="新密码">
-        <n-input v-model:value="newPwd" type="password" show-password-on="click" placeholder="至少 6 位" />
+        <n-input v-model:value="newPwd" type="password" show-password-on="click" placeholder="至少 8 位, 需含字母和数字" />
       </n-form-item>
     </n-form>
     <template #footer>

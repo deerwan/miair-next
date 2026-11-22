@@ -2,7 +2,8 @@
 
 通知方式单选 (notify_type), 当前支持:
 - feishu: 飞书自定义机器人 Webhook;
-- wxpusher: WxPusher 极简推送, 仅需 SPT (Simple Push Token), 微信直接收消息。
+- wxpusher: WxPusher 极简推送, 仅需 SPT (Simple Push Token), 微信直接收消息;
+- telegram: Telegram Bot sendMessage, 支持自建反代 (notify_tg_api_base)。
 
 同一事件默认 1 小时内只推送一次, 避免轮询循环中重复失败导致消息轰炸。
 """
@@ -29,6 +30,17 @@ THROTTLE_SECONDS = 3600
 _last_sent: dict[str, float] = {}
 
 
+TG_DEFAULT_API_BASE = "https://api.telegram.org"
+
+
+def _normalize_tg_api_base(api_base: str) -> str:
+    """反代地址归一化: 空回退官方 API, 去尾部斜杠 (保留自定义路径前缀)"""
+    api_base = (api_base or "").strip()
+    if not api_base:
+        return TG_DEFAULT_API_BASE
+    return api_base.rstrip("/")
+
+
 def _active_channel(config) -> str | None:
     """当前生效的通知渠道; 未选择或所需凭证为空时返回 None"""
     ntype = getattr(config, "notify_type", "")
@@ -36,6 +48,12 @@ def _active_channel(config) -> str | None:
         return "feishu"
     if ntype == "wxpusher" and getattr(config, "notify_wxpusher_spt", ""):
         return "wxpusher"
+    if (
+        ntype == "telegram"
+        and getattr(config, "notify_tg_bot_token", "")
+        and getattr(config, "notify_tg_chat_id", "")
+    ):
+        return "telegram"
     return None
 
 
@@ -68,6 +86,15 @@ async def send_notification(
                 session,
                 config.notify_feishu_webhook,
                 getattr(config, "notify_feishu_secret", ""),
+                title,
+                content,
+            )
+        elif channel == "telegram":
+            ok = await _send_telegram(
+                session,
+                getattr(config, "notify_tg_api_base", ""),
+                config.notify_tg_bot_token,
+                config.notify_tg_chat_id,
                 title,
                 content,
             )
@@ -160,4 +187,40 @@ async def _send_wxpusher(
         return False
     except Exception as e:
         log.warning(f"[Notify] WxPusher 推送异常: {e}")
+        return False
+
+
+async def _send_telegram(
+    session: aiohttp.ClientSession,
+    api_base: str,
+    token: str,
+    chat_id: str,
+    title: str,
+    content: str,
+) -> bool:
+    """Telegram Bot sendMessage: 成功时接口返回 ok=true。
+
+    api_base 支持自建反代 (Cloudflare Workers / nginx / 自建 bot-api-server);
+    纯文本发送, 不用 parse_mode, 避免消息内容中的特殊字符转义失败。"""
+    url = f"{_normalize_tg_api_base(api_base)}/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": f"{title}\n{content}",
+        "disable_web_page_preview": True,
+    }
+    try:
+        async with session.post(url, json=payload) as resp:
+            if not (200 <= resp.status < 300):
+                log.warning(f"[Notify] Telegram 推送失败 HTTP {resp.status}: {title}")
+                return False
+            result = await resp.json(content_type=None)
+            if not result.get("ok"):
+                log.warning(f"[Notify] Telegram 推送被拒绝: {result.get('description', result)}")
+                return False
+            log.info(f"[Notify] Telegram 推送成功: {title}")
+            return True
+    except asyncio.CancelledError:
+        return False
+    except Exception as e:
+        log.warning(f"[Notify] Telegram 推送异常: {e}")
         return False
