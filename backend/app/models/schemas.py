@@ -139,6 +139,10 @@ class LoginVerifyRequest(BaseModel):
     code: str = Field(min_length=1)
 
 
+class LoginSendCodeRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+
+
 class ManualTokenRequest(BaseModel):
     user_id: str = Field(min_length=1)
     pass_token: str = Field(min_length=1)

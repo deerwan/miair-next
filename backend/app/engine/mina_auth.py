@@ -4,7 +4,10 @@
 1. 密码登录: login() → serviceLogin → serviceLoginAuth2 → STS;
    触发图形验证码时前端展示 get_captcha_image() 取回的图片,
    用户输入后用 login_with_captcha() 续步 (captCode + ick);
-   触发短信/邮箱验证时用 login_with_verify_code() 续步
+   触发短信/邮箱验证时先用 send_verify_code() 触发小米下发验证码
+   (打开 authStart → identity/list → verifyPhone 触发 → sendPhoneTicket
+   发短信, 短信不会由 serviceLoginAuth2 自动下发), 再用
+   login_with_verify_code() 续步
    (verifyTicket → identity/list → 重定向收 passToken → serviceLogin 换 token);
 2. 手动 Token: refresh_by_pass_token() (passToken + userId → micoapi serviceToken);
 3. 扫码登录: qr_login.py 负责取码/轮询, 确认后同样走 refresh_by_pass_token()
@@ -160,6 +163,65 @@ class MinaAuth:
             return {"state": STATE_FAILED, "error": "no passToken after verify"}
 
         return await self._exchange_service_token(pass_token, user_id, sid)
+
+    async def send_verify_code(self) -> dict:
+        """触发小米下发短信/邮箱验证码
+
+        小米的二次验证中短信不由 serviceLoginAuth2 自动下发: 需打开
+        notificationUrl (identity authStart) 建立验证会话, GET verifyPhone/
+        verifyEmail 触发, 手机验证码还需 POST sendPhoneTicket 才真正发出。
+        必须在 login_with_verify_code() 之前调用 (此前面板跳过本步骤却提示
+        「验证码已发送」, 导致短信永远不到, 见 issue #22)。
+        """
+        if not self.verify_url:
+            return {"state": STATE_FAILED, "error": "no verify url, please call login first"}
+
+        # Step 1: 打开 authStart 建立验证会话 (Cookie 记入本会话 CookieJar)
+        try:
+            async with self._client().get(
+                self.verify_url, headers={"User-Agent": self.user_agent}
+            ) as r:
+                await r.read()
+        except Exception as e:
+            log.info(f"[mina_auth] 打开验证会话异常 (继续): {e}")
+
+        # Step 2: identity/list 获取验证方式 (flag 4=手机, 8=邮箱)
+        await self._check_identity_list()
+
+        # Step 3: 触发验证会话
+        if "email" in self.verify_url:
+            flag, otp_api, otp_name = "8", "/identity/auth/verifyEmail", "邮箱"
+        else:
+            flag, otp_api, otp_name = "4", "/identity/auth/verifyPhone", "手机"
+        trigger = await self._request_json(
+            "GET",
+            f"{ACCOUNT_BASE_URL}{otp_api}?_flag={flag}&_json=true"
+            f"&_dc={int(time.time() * 1000)}",
+        )
+        if trigger is None:
+            return {"state": STATE_FAILED, "error": "触发验证会话失败"}
+
+        # Step 4: 手机验证码需调用 sendPhoneTicket 才真正下发短信
+        if otp_api == "/identity/auth/verifyPhone":
+            sent = await self._request_json(
+                "POST",
+                f"{ACCOUNT_BASE_URL}/identity/auth/sendPhoneTicket",
+                data={"retry": "0", "icode": "", "_json": "true"},
+            )
+            if sent is None:
+                return {"state": STATE_FAILED, "error": "发送验证码请求失败"}
+            code = _get_code(sent)
+            if code != 0:
+                return {
+                    "state": STATE_FAILED,
+                    "error": (
+                        f"发送验证码失败: code={code}, desc="
+                        f"{_get_str(sent, 'desc', _get_str(sent, 'description'))}"
+                    ),
+                }
+
+        log.info(f"[mina_auth] {otp_name}验证码发送请求已完成")
+        return {"state": "sent", "verify_type": "email" if flag == "8" else "phone"}
 
     async def get_captcha_image(self, captcha_url: str) -> dict:
         """获取验证码图片 (base64) 并记录 ick cookie"""
@@ -442,7 +504,19 @@ class MinaAuth:
     async def _follow_redirects_for_cookies(self, location: str):
         """跟随重定向链收集 passToken/userId cookie (失败不致命)"""
         try:
-            await self._client().get(location, headers={"User-Agent": self.user_agent})
+            confirm_url = ""
+            async with self._client().get(
+                location, headers={"User-Agent": self.user_agent}
+            ) as r:
+                await r.read()
+                # 小米可能停在「确认手机号」页 (/fe/service/verifyPhone),
+                # 其 confirmUrl 参数继续跳转链, 缺这一步拿不到 passToken
+                confirm_url = r.url.query.get("confirmUrl", "")
+            if confirm_url:
+                async with self._client().get(
+                    confirm_url, headers={"User-Agent": self.user_agent}
+                ) as r:
+                    await r.read()
         except Exception as e:
             log.info(f"[mina_auth] 收集登录 cookie 重定向异常 (忽略): {e}")
 
@@ -511,6 +585,18 @@ class PasswordLoginService:
             return {"state": STATE_FAILED, "error": "会话已过期, 请重新登录"}, ""
         result = await session.auth.login_with_verify_code(code, MINA_SID)
         return self._handle_result(session, result)
+
+    async def send_verify_code(self, session_id: str) -> tuple[dict, str]:
+        """触发下发短信/邮箱验证码 (submit_verify_code 的前置步骤)
+
+        "sent" 非终态: 失败 (如频控) 时会话保留, 用户可重试发送。
+        """
+        session = self._get_session(session_id)
+        if session is None or session.auth is None:
+            return {"state": STATE_FAILED, "error": "会话已过期, 请重新登录"}, ""
+        result = await session.auth.send_verify_code()
+        session.state = result.get("state", session.state)
+        return result, session.session_id
 
     def cleanup_expired(self):
         expired = [sid for sid, s in self._sessions.items() if s.is_expired()]

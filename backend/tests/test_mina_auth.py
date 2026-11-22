@@ -289,6 +289,117 @@ class TestRefreshByPassToken:
         assert auth.token_info["services"] == {}
 
 
+BODY_SEND_TICKET_OK = _body({"code": 0, "description": "发送成功"})
+BODY_SEND_TICKET_FAIL = _body({"code": 70022, "desc": "操作过于频繁"})
+
+
+class TestSendVerifyCode:
+    """触发下发短信/邮箱验证码 (issue #22: 短信不由 serviceLoginAuth2 自动下发)"""
+
+    def _need_verify_auth(self, session) -> MinaAuth:
+        auth = MinaAuth(session=session)
+        asyncio.run(auth.login("13800000000", "pwd"))
+        return auth
+
+    def test_phone_send_flow_calls_send_phone_ticket(self):
+        """手机验证码: authStart → identity/list → verifyPhone 触发 → sendPhoneTicket 发短信"""
+        auth, session = _make_auth([
+            FakeResponse(body=BODY_STEP1),
+            FakeResponse(body=BODY_AUTH2_NEED_VERIFY),
+            # send_verify_code: authStart / identity/list / verifyPhone 触发 / sendPhoneTicket
+            FakeResponse(body="ok"),
+            FakeResponse(body="ok"),
+            FakeResponse(body=_body({"code": 0})),
+            FakeResponse(body=BODY_SEND_TICKET_OK),
+        ])
+        asyncio.run(auth.login("13800000000", "pwd"))
+
+        result = asyncio.run(auth.send_verify_code())
+
+        assert result["state"] == "sent"
+        assert result["verify_type"] == "phone"
+        urls = [c["url"] for c in session.calls]
+        assert any("/fe/service/identity/authStart" in u for u in urls)
+        assert any("/identity/list" in u for u in urls)
+        assert any("/identity/auth/verifyPhone?_flag=4" in u for u in urls)
+        send_calls = [c for c in session.calls if "/identity/auth/sendPhoneTicket" in c["url"]]
+        assert len(send_calls) == 1
+        assert send_calls[0]["method"] == "POST"
+        assert send_calls[0]["kwargs"]["data"] == {"retry": "0", "icode": "", "_json": "true"}
+
+    def test_email_flow_skips_send_phone_ticket(self):
+        """邮箱验证: 只触发 verifyEmail, 不调 sendPhoneTicket"""
+        auth, session = _make_auth([
+            FakeResponse(body=BODY_STEP1),
+            FakeResponse(body=_body({
+                "code": 0, "result": "ok", "securityStatus": 7,
+                "notificationUrl": "/fe/service/identity/authStart?type=email",
+                "location": "", "pwd": 1,
+            })),
+            FakeResponse(body="ok"),
+            FakeResponse(body="ok"),
+            FakeResponse(body=_body({"code": 0})),
+        ])
+        asyncio.run(auth.login("user@example.com", "pwd"))
+
+        result = asyncio.run(auth.send_verify_code())
+
+        assert result["state"] == "sent"
+        assert result["verify_type"] == "email"
+        assert not any("/identity/auth/sendPhoneTicket" in c["url"] for c in session.calls)
+        assert any("/identity/auth/verifyEmail?_flag=8" in c["url"] for c in session.calls)
+
+    def test_send_rate_limited_reports_desc(self):
+        """小米频控 (code!=0) 时返回 failed 并带出 desc"""
+        auth, session = _make_auth([
+            FakeResponse(body=BODY_STEP1),
+            FakeResponse(body=BODY_AUTH2_NEED_VERIFY),
+            FakeResponse(body="ok"),
+            FakeResponse(body="ok"),
+            FakeResponse(body=_body({"code": 0})),
+            FakeResponse(body=BODY_SEND_TICKET_FAIL),
+        ])
+        asyncio.run(auth.login("13800000000", "pwd"))
+
+        result = asyncio.run(auth.send_verify_code())
+
+        assert result["state"] == "failed"
+        assert "70022" in result["error"]
+        assert "操作过于频繁" in result["error"]
+
+    def test_send_without_login_fails(self):
+        """未先登录 (无 verify_url) 时拒绝"""
+        auth, _ = _make_auth([])
+        result = asyncio.run(auth.send_verify_code())
+        assert result["state"] == "failed"
+        assert "no verify url" in result["error"]
+
+    def test_send_then_verify_completes_login(self):
+        """发送 → 提交验证码 → 完成登录 (完整链路)"""
+        auth, session = _make_auth([
+            FakeResponse(body=BODY_STEP1),
+            FakeResponse(body=BODY_AUTH2_NEED_VERIFY),
+            # send: authStart / list / verifyPhone 触发 / sendPhoneTicket
+            FakeResponse(body="ok"),
+            FakeResponse(body="ok"),
+            FakeResponse(body=_body({"code": 0})),
+            FakeResponse(body=BODY_SEND_TICKET_OK),
+            # verify: identity/list / verifyTicket / redirect / exchange / STS
+            FakeResponse(body="ok"),
+            FakeResponse(body=BODY_VERIFY_TICKET_OK),
+            FakeResponse(body="ok"),
+            FakeResponse(body=BODY_EXCHANGE_OK),
+            FakeResponse(body="ok", cookies={"serviceToken": "st-3"}),
+        ], jar_cookies={"passToken": "pt-otp", "userId": "100"})
+        asyncio.run(auth.login("13800000000", "pwd"))
+
+        sent = asyncio.run(auth.send_verify_code())
+        assert sent["state"] == "sent"
+
+        done = asyncio.run(auth.login_with_verify_code("8848"))
+        assert done["state"] == "success"
+
+
 class TestPasswordLoginService:
     def test_success_extracts_credentials_and_cleans_session(self, monkeypatch):
         """登录成功: 返回 passToken/账密 (供持久化), 会话被清理"""

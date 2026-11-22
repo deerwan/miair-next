@@ -24,6 +24,7 @@ from app.engine.mina_auth import MINA_SID, MinaAuth, PasswordLoginService
 from app.engine.qr_login import QRLoginManager
 from app.models.schemas import (
     LoginCaptchaRequest,
+    LoginSendCodeRequest,
     LoginVerifyRequest,
     ManualTokenRequest,
     PasswordLoginRequest,
@@ -141,6 +142,8 @@ def _login_response(
             "state": "need_verify",
             "session_id": session_id,
             "verify_type": result.get("verify_type", "phone"),
+            # 小米验证页地址, 前端展示为浏览器手动操作的兜底链接
+            "verify_url": result.get("verify_url", ""),
         }
 
     return {"success": False, "state": "failed", "error": result.get("error") or "登录失败"}
@@ -248,6 +251,25 @@ async def submit_login_captcha(
         payload.session_id, payload.captcha
     )
     return _login_response(result, session_id, background, orch, config)
+
+
+@router.post("/account/login/send_verify_code")
+async def send_login_verify_code(payload: LoginSendCodeRequest):
+    """触发小米下发短信/邮箱验证码 (二次验证不会自动发送, 必须先调用本接口)"""
+    result, session_id = await _login_manager.send_verify_code(payload.session_id)
+    if result.get("state") == "sent":
+        return {
+            "success": True,
+            "state": "sent",
+            "session_id": session_id,
+            "verify_type": result.get("verify_type", "phone"),
+        }
+    return {
+        "success": False,
+        "state": result.get("state") or "failed",
+        "session_id": session_id,
+        "error": result.get("error") or "发送验证码失败",
+    }
 
 
 @router.post("/account/login/verify")

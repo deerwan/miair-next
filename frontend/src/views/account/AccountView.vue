@@ -104,9 +104,19 @@
               <n-button :loading="pw.loading" @click="submitPwCaptcha">提交</n-button>
             </n-space>
 
-            <!-- 短信/邮箱验证码续步 -->
+            <!-- 短信/邮箱验证码续步 (小米不会自动下发, 须先点「发送验证码」) -->
             <n-space v-else-if="pw.state === 'need_verify'" align="center" :size="12">
-              <n-text>验证码已发送至{{ pw.verifyType === 'email' ? '邮箱' : '手机' }}</n-text>
+              <n-text>{{ pw.otpSent
+                ? `验证码已发送至${pw.verifyType === 'email' ? '邮箱' : '手机'}, 请查收`
+                : '小米要求短信/邮箱验证: 点击按钮发送验证码' }}</n-text>
+              <n-button
+                :loading="pw.sending"
+                :type="pw.otpSent ? 'default' : 'primary'"
+                size="small"
+                @click="sendPwVerifyCode"
+              >
+                {{ pw.otpSent ? '重新发送' : '发送验证码' }}
+              </n-button>
               <n-input
                 v-model:value="pw.verifyCode"
                 placeholder="请输入验证码"
@@ -114,6 +124,11 @@
                 @keyup.enter="submitPwVerify"
               />
               <n-button :loading="pw.loading" @click="submitPwVerify">提交</n-button>
+              <n-text v-if="pw.verifyUrl" depth="3" style="font-size: 12px; width: 100%">
+                收不到短信? 可
+                <n-a :href="pw.verifyUrl" target="_blank" rel="noopener">在浏览器打开小米验证页</n-a>
+                手动点「发送验证码」后回来输入
+              </n-text>
             </n-space>
 
             <n-text v-if="pw.error" type="error">{{ pw.error }}</n-text>
@@ -189,7 +204,7 @@
 import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
 import {
   NSpace, NCard, NForm, NFormItem, NInput, NButton, NAlert, NCheckbox,
-  NCheckboxGroup, NText, NEmpty, NSpin, NTabs, NTabPane, NTag, NIcon, useMessage, useDialog,
+  NCheckboxGroup, NText, NEmpty, NSpin, NTabs, NTabPane, NTag, NIcon, NA, useMessage, useDialog,
 } from 'naive-ui'
 import { fetchSettings, saveSettings, restartServices } from '@/api/system'
 import { fetchCloudDevices, type CloudDevice } from '@/api/speakers'
@@ -201,6 +216,7 @@ import {
   passwordLogin,
   submitLoginCaptcha,
   submitLoginVerifyCode,
+  sendLoginVerifyCode,
   setManualToken,
   type QRPollState,
   type AccountStatus,
@@ -393,6 +409,9 @@ const pw = reactive({
   captchaImage: '',
   captchaCode: '',
   verifyType: 'phone' as 'phone' | 'email',
+  verifyUrl: '',
+  otpSent: false,
+  sending: false,
   verifyCode: '',
   loading: false,
   error: '',
@@ -403,6 +422,8 @@ function resetPwSession() {
   pw.state = 'idle'
   pw.captchaImage = ''
   pw.captchaCode = ''
+  pw.verifyUrl = ''
+  pw.otpSent = false
   pw.verifyCode = ''
 }
 
@@ -436,6 +457,30 @@ async function submitPwCaptcha() {
     pw.error = e.response?.data?.detail || '验证码提交失败'
   } finally {
     pw.loading = false
+  }
+}
+
+// 触发小米下发验证码 (二次验证不会自动发送短信)
+async function sendPwVerifyCode() {
+  if (!pw.sessionId) {
+    message.warning('登录会话已失效, 请重新登录')
+    return
+  }
+  pw.sending = true
+  pw.error = ''
+  try {
+    const res = await sendLoginVerifyCode(pw.sessionId)
+    if (res.success && res.state === 'sent') {
+      pw.otpSent = true
+      pw.verifyCode = ''
+      message.success(`验证码已发送至${pw.verifyType === 'email' ? '邮箱' : '手机'}`)
+    } else {
+      pw.error = res.error || '发送验证码失败'
+    }
+  } catch (e: any) {
+    pw.error = e.response?.data?.detail || '发送验证码失败'
+  } finally {
+    pw.sending = false
   }
 }
 
@@ -475,6 +520,8 @@ function handlePwResult(res: PasswordLoginResult) {
     pw.sessionId = res.session_id || ''
     pw.state = 'need_verify'
     pw.verifyType = res.verify_type || 'phone'
+    pw.verifyUrl = res.verify_url || ''
+    pw.otpSent = false
     pw.verifyCode = ''
     return
   }

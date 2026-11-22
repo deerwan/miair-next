@@ -59,7 +59,7 @@ export async function deleteAccount(): Promise<{ ok: boolean; message: string }>
 
 // ===== 密码登录 (交互式: 登录 → 验证码/短信验证 → 成功) =====
 
-export type PasswordLoginState = 'success' | 'need_captcha' | 'need_verify' | 'failed'
+export type PasswordLoginState = 'success' | 'need_captcha' | 'need_verify' | 'sent' | 'failed'
 
 export interface PasswordLoginResult {
   success: boolean
@@ -67,6 +67,7 @@ export interface PasswordLoginResult {
   session_id?: string
   captcha_image?: string
   verify_type?: 'phone' | 'email'
+  verify_url?: string
   message?: string
   error?: string
 }
@@ -86,6 +87,12 @@ export async function submitLoginCaptcha(sessionId: string, captcha: string): Pr
 /** 提交短信/邮箱验证码, 完成密码登录流程 */
 export async function submitLoginVerifyCode(sessionId: string, code: string): Promise<PasswordLoginResult> {
   const { data } = await http.post('/account/login/verify', { session_id: sessionId, code })
+  return data
+}
+
+/** 触发小米下发短信/邮箱验证码 (二次验证不会自动发送, 必须先调用) */
+export async function sendLoginVerifyCode(sessionId: string): Promise<PasswordLoginResult> {
+  const { data } = await http.post('/account/login/send_verify_code', { session_id: sessionId })
   return data
 }
 

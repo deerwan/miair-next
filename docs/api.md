@@ -57,6 +57,7 @@
 | GET | `/api/v1/account/qrcode/poll` | 轮询扫码结果(`?session_id=<id>`) |
 | POST | `/api/v1/account/login` | 账号密码登录,可能返回需图形验证码/短信邮箱验证 |
 | POST | `/api/v1/account/login/captcha` | 提交图形验证码,继续密码登录流程 |
+| POST | `/api/v1/account/login/send_verify_code` | 触发小米下发短信/邮箱验证码(二次验证不会自动发送) |
 | POST | `/api/v1/account/login/verify` | 提交短信/邮箱验证码,完成密码登录流程 |
 | POST | `/api/v1/account/token` | 手动提交 `userId` + `passToken`,立即验证并换取 serviceToken |
 | GET | `/api/v1/account/status` | 当前登录状态(`offline` / `expired` / `expiring` / `healthy`) |
@@ -68,7 +69,7 @@
 | --- | --- | --- |
 | `success` | 登录成功,凭证已落盘 | 无需续步,服务热重启中 |
 | `need_captcha` | 需要图形验证码 | 带 `session_id` + `captcha` 调 `/account/login/captcha` |
-| `need_verify` | 需要短信/邮箱验证码 | 带 `session_id` + `code` 调 `/account/login/verify` |
+| `need_verify` | 需要短信/邮箱验证码 | 先带 `session_id` 调 `/account/login/send_verify_code` 触发下发(响应含 `verify_url` 浏览器兜底链接),收到短信后带 `session_id` + `code` 调 `/account/login/verify` |
 | `failed` | 失败 | 查看 `error` |
 
 > `passToken` / `serviceToken` 全程留在后端,不返回给前端。扫码或密码登录成功后,后端将凭证写入 `config.json` 与 `.mi.token`(权限 `600`)并热重启 DLNA/AirPlay 服务。
