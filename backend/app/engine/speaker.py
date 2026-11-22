@@ -89,9 +89,15 @@ class SpeakerController:
             # 登录失效由 call_api 统一走三级降级链恢复并重试一次
             # (MinaHTTPClient 的 401 → onTokenExpired → retry)
             if self._should_use_music_api():
+                # 触屏歌词/封面开启时 _type=1 (audio_type=MUSIC) 是触屏进入
+                # 音乐语义的前提, 缺失时部分触屏型号 (X08C) 播放会话异常;
+                # 关闭时保持默认 _type=2 (audio_type 为空), 与既有行为一致
+                kwargs = {"audio_id": effective_audio_id}
+                if getattr(self.config, "touchscreen_lyrics", False):
+                    kwargs["_type"] = 1
                 ret = await self.auth.call_api(
                     lambda: self.auth.mina_service.play_by_music_url(
-                        self.device_id, url, audio_id=effective_audio_id
+                        self.device_id, url, **kwargs
                     ),
                     label="play_by_music_url",
                 )

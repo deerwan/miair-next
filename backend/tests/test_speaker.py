@@ -49,6 +49,76 @@ def _make_controller(tmp_path, fail: bool = False, idle: bool = False) -> Speake
     )
 
 
+class RecorderMina:
+    """记录 play 调用参数的 Mina 替身"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def player_get_status(self, device_id):
+        return {"code": 0, "data": {"info": '{"status":1,"volume":30}'}}
+
+    async def play_by_music_url(self, device_id, url, **kwargs):
+        self.calls.append(("music", url, kwargs))
+        return {"code": 0, "data": {"code": 0}}
+
+    async def play_by_url(self, device_id, url):
+        self.calls.append(("url", url, {}))
+        return {"code": 0, "data": {"code": 0}}
+
+
+class TestPlayUrlMusicType:
+    """触屏歌词开启时 play_by_music_url 需携带 _type=1 (audio_type=MUSIC)"""
+
+    def _make(self, tmp_path, hardware, lyrics, compat=None):
+        from app.engine.auth import AuthManager  # noqa: F401 -- 占位避免误用
+
+        class RecAuth:
+            def __init__(self, mina):
+                self.mina_service = mina
+
+            async def ensure_login(self):
+                return None
+
+            async def call_api(self, factory, label=""):
+                return await factory()
+
+        mina = RecorderMina()
+        speaker = Speaker(
+            did="123", device_id="dev-1", hardware=hardware,
+            compatibility_mode=compat,
+        )
+        config = Config(conf_path=str(tmp_path))
+        config.touchscreen_lyrics = lyrics
+        controller = SpeakerController(speaker, auth=RecAuth(mina), config=config)
+        return controller, mina
+
+    def test_lyrics_on_sends_music_type(self, tmp_path):
+        """歌词开启: _type=1 (audio_type=MUSIC), audio_id 透传"""
+        controller, mina = self._make(tmp_path, "X08C", lyrics=True)
+        ok = asyncio.run(controller.play_url("http://x/stream.mp3", "999"))
+        assert ok is True
+        kind, url, kwargs = mina.calls[0]
+        assert kind == "music"
+        assert kwargs["_type"] == 1
+        assert kwargs["audio_id"] == "999"
+
+    def test_lyrics_off_keeps_default_type(self, tmp_path):
+        """歌词关闭: 不带 _type, 保持既有行为 (audio_type 为空)"""
+        controller, mina = self._make(tmp_path, "X08C", lyrics=False)
+        asyncio.run(controller.play_url("http://x/stream.mp3"))
+        kind, _, kwargs = mina.calls[0]
+        assert kind == "music"
+        assert "_type" not in kwargs
+
+    def test_compat_mode_uses_play_by_url(self, tmp_path):
+        """显式兼容模式: 走 play_by_url, 不涉 _type"""
+        controller, mina = self._make(tmp_path, "X08C", lyrics=True, compat=True)
+        asyncio.run(controller.play_url("http://x/stream.mp3"))
+        kind, _, kwargs = mina.calls[0]
+        assert kind == "url"
+
+
 class TestFailureCounter:
     def test_success_resets_counter(self, tmp_path):
         """获取状态成功后必须重置实例级连续失败计数
