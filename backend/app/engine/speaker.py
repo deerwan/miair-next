@@ -67,14 +67,15 @@ class SpeakerController:
         return self.speaker.did
 
     def _should_use_music_api(self) -> bool:
-        # 型号在 NEED_USE_PLAY_MUSIC_API 白名单时优先走 play_by_music_url，
+        # 用户显式设置的兼容模式优先于型号白名单: 触屏型号的 ROM 播放器
+        # 存在兼容性差异, 允许手动改走 play_by_url 作为兜底手段。
+        # 未显式设置时, 白名单型号 (触屏等) 默认走 play_by_music_url，
         # 使 default_audio_id 指定的封面/触屏歌词在触屏音箱生效。
-        # 兼容模式仅影响非白名单设备，不再覆盖白名单型号的 music api 路径。
+        if self.speaker.compatibility_mode is not None:
+            return not self.speaker.compatibility_mode
         if self.speaker.hardware and self.speaker.hardware.upper() in NEED_USE_PLAY_MUSIC_API:
             return True
-        if self.speaker.is_compatibility_mode():
-            return False
-        return True
+        return not self.speaker.is_compatibility_mode()
 
     async def play_url(self, url: str, audio_id: str | None = None) -> bool:
         """让音箱播放指定 URL

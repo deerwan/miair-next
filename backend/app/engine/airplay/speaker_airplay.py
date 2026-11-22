@@ -14,6 +14,7 @@ from zeroconf import Zeroconf, IPVersion
 from app.engine.airplay.server import AirPlayServer
 from app.engine.airplay.shairport_server import ShairportSyncServer
 from app.engine.audio_stream import with_cache_buster
+from app.engine.config import resolve_airplay_stream_format
 from app.engine.speaker import SpeakerController
 
 log = logging.getLogger("miair")
@@ -86,7 +87,8 @@ class SpeakerAirPlay:
             else:
                 self.airplay_server = AirPlayServer(
                     self.hostname, self.device_name, self.shared_zeroconf,
-                    speaker_hardware=self.speaker.hardware
+                    speaker_hardware=self.speaker.hardware,
+                    stream_format=resolve_airplay_stream_format(self.config, self.speaker.hardware),
                 )
 
             # 设置回调：直接播放到这个音箱

@@ -450,7 +450,7 @@ class AirPlayServer:
     实现 AirPlay 1 (RAOP) 协议接收音频，解码后输出到 HTTP 音频流。
     """
 
-    def __init__(self, hostname: str, device_name: str = "MiAir", shared_zeroconf=None, speaker_hardware: str = ""):
+    def __init__(self, hostname: str, device_name: str = "MiAir", shared_zeroconf=None, speaker_hardware: str = "", stream_format: str = "wav"):
         self.hostname = hostname
         self.device_name = device_name
         self.speaker_hardware = speaker_hardware
@@ -463,8 +463,9 @@ class AirPlayServer:
         self._rtsp_thread: threading.Thread | None = None
         self._running = False
 
-        # 音频流服务器 - 统一使用 WAV 输出（零编码延迟，不卡顿）
-        self._stream_server = AudioStreamServer(hostname, 0, audio_format="wav")
+        # 音频流服务器 - 触屏等 music-api 型号走 MP3 转码 (无限 WAV 流不被其
+        # 播放器接受), 其余保持 WAV 零编码延迟
+        self._stream_server = AudioStreamServer(hostname, 0, audio_format=stream_format)
         self.stream_port = 0
 
         # mDNS 广播

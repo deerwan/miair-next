@@ -15,6 +15,7 @@ export interface Settings {
   hostname: string
   dlna_port: number
   airplay_mode: 'airplay1' | 'airplay2'
+  airplay_stream_format: 'auto' | 'wav' | 'mp3'
   airplay2_target_did: string
   airplay2_port: number
   airplay2_output_latency_ms: number

@@ -25,6 +25,22 @@ _SENSITIVE_FIELDS = (
 )
 
 
+def resolve_airplay_stream_format(config, hardware: str) -> str:
+    """决策 AirPlay HTTP 音频流格式 (wav / mp3)
+
+    auto: music-api 白名单型号 (触屏等, 其 ROM 播放器不接受无限 WAV
+    流) 使用 ffmpeg MP3 转码; 其余型号保持 WAV 零编码延迟。
+    显式配置 wav / mp3 时无条件生效 (排查兼容问题时可手动切换)。
+    """
+    fmt = (getattr(config, "airplay_stream_format", "auto") or "auto").lower()
+    if fmt in ("wav", "mp3"):
+        return fmt
+    from app.engine.const import NEED_USE_PLAY_MUSIC_API
+    if (hardware or "").upper() in NEED_USE_PLAY_MUSIC_API:
+        return "mp3"
+    return "wav"
+
+
 @dataclass
 class Speaker:
     """单个小爱音箱的配置"""
@@ -90,6 +106,9 @@ class Config:
     # 测试版在一个 IP 上只启动一个接收器；这不限制与其他 IP 的设备组播。
     # 环境变量只提供新配置的默认值，不覆盖 Web 后台保存的模式。
     airplay_mode: str = field(default_factory=lambda: os.getenv("MIAIR_AIRPLAY_MODE", "airplay1"))
+    # AirPlay HTTP 音频流格式: auto=白名单型号 (music-api) 用 MP3 转码, 其余 WAV;
+    # 触屏等 music-api 播放器不接受无限 WAV 流
+    airplay_stream_format: str = field(default_factory=lambda: os.getenv("MIAIR_AIRPLAY_STREAM_FORMAT", "auto"))
     airplay2_target_did: str = ""
     airplay2_port: int = 7000
     # HTTP-write to acoustic output estimate. Higher values send PCM earlier.
@@ -152,6 +171,8 @@ class Config:
         self.resume_delay_seconds = max(1, min(15, self.resume_delay_seconds))
         if self.airplay_mode not in ("airplay1", "airplay2"):
             self.airplay_mode = "airplay1"
+        if self.airplay_stream_format not in ("auto", "wav", "mp3"):
+            self.airplay_stream_format = "auto"
         self.airplay2_port = max(1, min(65535, self.airplay2_port))
         self.airplay2_output_latency_ms = max(0, min(4000, self.airplay2_output_latency_ms))
         if not self.account:

@@ -39,6 +39,7 @@ async def get_settings_api(
         "hostname": config.hostname,
         "dlna_port": config.dlna_port,
         "airplay_mode": config.airplay_mode,
+        "airplay_stream_format": config.airplay_stream_format,
         "airplay2_target_did": config.airplay2_target_did
         or (orch.airplay_manager.airplay2_target_did if orch.airplay_manager else ""),
         "airplay2_port": config.airplay2_port,
@@ -123,6 +124,8 @@ async def save_settings_api(
         config.dlna_port = payload.dlna_port
     if payload.airplay_mode is not None:
         config.airplay_mode = payload.airplay_mode
+    if payload.airplay_stream_format is not None:
+        config.airplay_stream_format = payload.airplay_stream_format
     if payload.airplay2_target_did is not None:
         config.airplay2_target_did = payload.airplay2_target_did.strip()
     if payload.airplay2_port is not None:

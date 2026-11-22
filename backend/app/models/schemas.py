@@ -72,6 +72,7 @@ class SettingsPayload(BaseModel):
     mi_did: str | None = None
     dlna_port: int | None = Field(default=None, ge=1, le=65535)
     airplay_mode: Literal["airplay1", "airplay2"] | None = None
+    airplay_stream_format: Literal["auto", "wav", "mp3"] | None = None
     airplay2_target_did: str | None = None
     airplay2_port: int | None = Field(default=None, ge=1, le=65535)
     airplay2_output_latency_ms: int | None = Field(default=None, ge=0, le=4000)

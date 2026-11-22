@@ -89,6 +89,22 @@
                     @apply="saveLatency"
                   />
                 </n-form-item>
+                <n-form-item label="AirPlay 音频流格式">
+                  <div class="field-with-tip">
+                    <n-select
+                      v-model:value="form.airplay_stream_format"
+                      :options="[
+                        { label: '自动 (推荐)', value: 'auto' },
+                        { label: 'WAV (零编码延迟)', value: 'wav' },
+                        { label: 'MP3 (ffmpeg 转码)', value: 'mp3' },
+                      ]"
+                      style="max-width: 400px"
+                    />
+                    <n-text depth="3" class="field-tip">
+                      自动: 触屏等 music-api 型号使用 MP3 转码 (其播放器不接受 WAV 流), 其余型号使用 WAV; 遇到投送无声可手动切换排查
+                    </n-text>
+                  </div>
+                </n-form-item>
                 <n-form-item label="设备离线自动重启">
                   <n-switch v-model:value="form.auto_restart" />
                 </n-form-item>
@@ -553,6 +569,7 @@ const form = reactive({
   follow_device_volume: false,
   dlna_port: 8200,
   airplay_mode: 'airplay1' as 'airplay1' | 'airplay2',
+  airplay_stream_format: 'auto' as 'auto' | 'wav' | 'mp3',
   airplay2_target_did: '',
   airplay2_port: 7000,
   airplay2_output_latency_ms: 1000 as number | null,
@@ -667,6 +684,7 @@ async function load() {
     form.follow_device_volume = s.follow_device_volume
     form.dlna_port = s.dlna_port
     form.airplay_mode = s.airplay_mode || 'airplay1'
+    form.airplay_stream_format = s.airplay_stream_format || 'auto'
     form.airplay2_target_did = s.airplay2_target_did || ''
     form.airplay2_port = s.airplay2_port || 7000
     form.airplay2_output_latency_ms = s.airplay2_output_latency_ms ?? 1000
