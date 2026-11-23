@@ -184,22 +184,48 @@ class Config:
         # MIAIR_HOSTNAME 环境变量优先级最高 (覆盖持久化配置),
         # 用于纠正多网卡/容器下自动探测到的错误 IP 导致 AirPlay 不可连接
         env_hostname = os.getenv("MIAIR_HOSTNAME", "")
+        hostname_from_env = bool(env_hostname)
         if env_hostname:
             self.hostname = env_hostname
             if self._is_loopback_hostname(env_hostname):
                 log.warning(
                     f"MIAIR_HOSTNAME={env_hostname} 是回环地址, 音箱无法访问该地址 (拉流将无声)!"
                 )
-        # 持久化配置中的回环地址 (历史版本探测失败写入的 127.0.0.1) 不可信,
-        # 必须重新探测纠正, 否则音箱永远拉不到音频流且无法自愈
-        if not self.hostname or self._is_loopback_hostname(self.hostname):
+        # 持久化配置中的不可信地址必须重新探测纠正, 否则 SSDP/mDNS/音频流
+        # 地址持续指向音箱不可达的网卡且无法自愈:
+        # - 回环 (127.0.0.1): 历史版本探测失败的固化结果
+        # - Tailscale CGNAT (100.64.0.0/10) / docker0 / 公网 IP: 旧版本
+        #   探测写入, 升级后不纠正会一直污染 (issue #21);
+        # 域名类 hostname (用户有意配置) 不是 IP 字面量, 不参与自愈;
+        # MIAIR_HOSTNAME 显式指定的值视为用户选择, 仅回环时纠正。
+        if (
+            not self.hostname
+            or self._is_loopback_hostname(self.hostname)
+            or (
+                not hostname_from_env
+                and self._is_ip_address(self.hostname)
+                and not self._is_lan_ip(self.hostname)
+            )
+        ):
             detected = self._detect_local_ip()
             if self.hostname and self.hostname != detected:
                 log.warning(
-                    f"配置中的主机名 {self.hostname} 是回环地址, 已重新探测为 {detected}"
+                    f"配置中的主机名 {self.hostname} 不可用 (回环/虚拟网卡/公网地址), "
+                    f"已重新探测为 {detected}"
                     " (如仍不正确, 请设置 MIAIR_HOSTNAME=<本机局域网IP>)"
                 )
             self.hostname = detected
+
+    @staticmethod
+    def _is_ip_address(hostname: str) -> bool:
+        """判断是否为合法 IP 字面量 (域名类 hostname 返回 False)。"""
+        import ipaddress
+
+        try:
+            ipaddress.ip_address(hostname)
+            return True
+        except ValueError:
+            return False
 
     @staticmethod
     def _is_loopback_hostname(hostname: str) -> bool:

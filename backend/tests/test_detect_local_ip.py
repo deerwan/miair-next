@@ -130,6 +130,31 @@ class TestHostnamePostInit:
         cfg = Config(hostname="")
         assert cfg.hostname == "192.168.50.99"
 
+    def test_persisted_cgnat_is_corrected(self, monkeypatch):
+        """issue #21 核心场景: config.json 固化的 Tailscale CGNAT IP 必须重新探测纠正"""
+        self._detect_fixed(monkeypatch, "192.168.50.99")
+        cfg = Config(hostname="100.114.128.206")
+        assert cfg.hostname == "192.168.50.99"
+
+    def test_persisted_docker_ip_is_corrected(self, monkeypatch):
+        """docker0 地址固化同样纠正"""
+        self._detect_fixed(monkeypatch, "192.168.50.99")
+        cfg = Config(hostname="172.17.0.5")
+        assert cfg.hostname == "192.168.50.99"
+
+    def test_persisted_domain_kept(self, monkeypatch):
+        """域名类 hostname (用户有意配置) 不是 IP 字面量, 不参与自愈"""
+        self._detect_fixed(monkeypatch, "192.168.50.99")
+        cfg = Config(hostname="myhost.example.com")
+        assert cfg.hostname == "myhost.example.com"
+
+    def test_env_non_lan_value_respected(self, monkeypatch):
+        """MIAIR_HOSTNAME 显式指定的非局域网 IP 视为用户选择, 不纠正"""
+        self._detect_fixed(monkeypatch, "192.168.50.99")
+        monkeypatch.setenv("MIAIR_HOSTNAME", "100.114.128.206")
+        cfg = Config(hostname="192.168.1.5")
+        assert cfg.hostname == "100.114.128.206"
+
 
 # ---------------------------------------------------------------------------
 # Config.save(): 回环 hostname 不持久化
