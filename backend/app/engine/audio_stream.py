@@ -125,6 +125,11 @@ class AudioStreamServer:
             return self._client_count
 
     @property
+    def audio_format(self) -> str:
+        """当前下发的音频流格式 (wav / mp3)"""
+        return self._audio_format
+
+    @property
     def queue_depth(self) -> int:
         """待发送 PCM 块数量，供运行诊断查看"""
         return self._audio_queue.qsize()

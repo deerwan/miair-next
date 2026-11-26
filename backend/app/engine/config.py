@@ -28,15 +28,16 @@ _SENSITIVE_FIELDS = (
 def resolve_airplay_stream_format(config, hardware: str) -> str:
     """决策 AirPlay HTTP 音频流格式 (wav / mp3)
 
-    auto: music-api 白名单型号 (触屏等, 其 ROM 播放器不接受无限 WAV
-    流) 使用 ffmpeg MP3 转码; 其余型号保持 WAV 零编码延迟。
+    auto: 仅 AIRPLAY_MP3_HARDWARE 中的触屏型号 (其 ROM 播放器不接受无限 WAV
+    流) 使用 ffmpeg MP3 转码; 其余型号 (含 music-api 白名单里的非触屏型号)
+    一律保持 WAV 零编码延迟 —— 非触屏白名单型号收到 .mp3 流地址不会来拉流。
     显式配置 wav / mp3 时无条件生效 (排查兼容问题时可手动切换)。
     """
     fmt = (getattr(config, "airplay_stream_format", "auto") or "auto").lower()
     if fmt in ("wav", "mp3"):
         return fmt
-    from app.engine.const import NEED_USE_PLAY_MUSIC_API
-    if (hardware or "").upper() in NEED_USE_PLAY_MUSIC_API:
+    from app.engine.const import AIRPLAY_MP3_HARDWARE
+    if (hardware or "").upper() in AIRPLAY_MP3_HARDWARE:
         return "mp3"
     return "wav"
 

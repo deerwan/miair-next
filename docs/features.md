@@ -2,7 +2,7 @@
 
 - **DLNA (UPnP AV)**：把小爱音箱注册为可投送的媒体渲染器，支持网易云音乐、QQ 音乐等 App 投送。
 - **AirPlay**：作为 AirPlay 接收器，支持 iPhone / Mac 音频投送（FairPlay / HAP 配对）。
-  - **音频流格式自适应**：触屏等 music-api 型号默认经 ffmpeg 转 MP3 下发（其 ROM 播放器不接受 WAV 流），其余型号保持 WAV 零编码延迟；服务设置中可手动切换（自动 / WAV / MP3）。设备上显式开启「兼容模式」可改走 `play_by_url` 作为兜底。
+  - **音频流格式自适应**：带屏型号（触屏音箱 / 智能家庭屏，如 X08C / LX04 / X10A）默认经 ffmpeg 转 MP3 下发（其 ROM 播放器不接受 WAV 流），其余型号（含 music-api 白名单中的非触屏型号，它们收到 MP3 地址不会来拉流）保持 WAV 零编码延迟；服务设置中可手动切换（自动 / WAV / MP3）。设备上显式开启「兼容模式」可改走 `play_by_url` 作为兜底。
 - **Spotify 畅联 (Spotify Connect)**：
   - **官方客户端支持**：内置 Spotify 官方 Soloist 引擎，小爱音箱可作为 Spotify Connect 设备被手机、平板及桌面端 App 发现并投送播放。
   - **支持跨网音乐控制**：区别于 DLNA / AirPlay 严格受限于同一局域网组播发现，Spotify Connect 基于云端会话同步；配对后手机无论处于移动蜂窝网络（4G/5G）还是异地 Wi-Fi，只要登录同一 Spotify 账号，均可随时随地远程向音箱投送、切歌与调音。

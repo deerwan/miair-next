@@ -1,9 +1,11 @@
 """AirPlay 音频流格式决策与兼容模式覆盖测试
 
-背景: 触屏型号 (music-api 白名单) 的 ROM 播放器不接受无限 WAV 流,
-拉流正常但解码失败 (无声 + 「播放服务出现错误」), 故 auto 模式下
-白名单型号改走 ffmpeg MP3 转码; 并允许用户显式设置的兼容模式
-覆盖型号白名单, 手动改走 play_by_url 兜底。
+背景: 带屏型号 (触屏音箱 / 智能家庭屏) 的 ROM
+播放器不接受无限 WAV 流, 拉流正常但解码失败 (无声 + 「播放服务出现错误」),
+故 auto 模式下这些型号改走 ffmpeg MP3 转码。MP3 集必须保持为带屏型号子集而
+不能直接用 music-api 白名单: 白名单里的非触屏型号 (OH2 / LX06 / L16A ...)
+收到 .mp3 流地址不会来拉流 (MiNA 回执 code 0 却无声)。允许用户显式设置的
+兼容模式覆盖型号白名单, 手动改走 play_by_url 兜底。
 """
 
 import asyncio
@@ -13,6 +15,7 @@ import pytest
 import app.engine.airplay  # noqa: F401 -- 先初始化 airplay 包, 单独运行本文件时避免 audio_stream 循环导入
 from app.engine.audio_stream import AudioStreamServer
 from app.engine.config import Config, Speaker, resolve_airplay_stream_format
+from app.engine.const import AIRPLAY_MP3_HARDWARE, NEED_USE_PLAY_MUSIC_API
 
 
 def _has_ffmpeg() -> bool:
@@ -21,11 +24,36 @@ def _has_ffmpeg() -> bool:
 
 
 class TestResolveStreamFormat:
-    def test_auto_whitelist_model_uses_mp3(self):
-        """auto: 白名单型号 (触屏等) 用 MP3 转码"""
+    def test_auto_touchscreen_model_uses_mp3(self):
+        """auto: 带屏型号 (ROM 不接受无限 WAV) 用 MP3 转码"""
         config = Config(conf_path="/tmp/miair-test-fmt")
-        for hw in ("X08C", "X08E", "X4B", "LX06", "L05B"):
+        for hw in ("X08C", "X08E", "X8F", "X08A", "X10A", "OH11", "X6A", "X4B", "L04M", "X8S", "OH27", "OH8", "lx04"):
             assert resolve_airplay_stream_format(config, hw) == "mp3"
+
+    def test_mp3_set_is_subset_of_music_api_whitelist(self):
+        """MP3 型号集必须是 music-api 白名单的子集 (两者语义不同, 不能互相替代)"""
+        assert AIRPLAY_MP3_HARDWARE <= set(NEED_USE_PLAY_MUSIC_API)
+        # 白名单里存在非触屏型号, 这正是不能直接套用白名单的原因
+        assert len(set(NEED_USE_PLAY_MUSIC_API) - AIRPLAY_MP3_HARDWARE) >= 10
+
+    def test_auto_non_touch_whitelist_model_uses_wav(self):
+        """auto: 白名单里的非触屏型号保持 WAV (回归: 收到 .mp3 地址不会来拉流, 切 wav 即恢复)
+
+        OH2 = Xiaomi 智能音箱, 即本次回归报告的型号。
+        """
+        config = Config(conf_path="/tmp/miair-test-fmt")
+        for hw in ("OH2", "OH2P", "LX05", "LX06", "L06A", "L05B", "L05C", "L15A", "L16A", "L17A"):
+            assert hw in NEED_USE_PLAY_MUSIC_API
+            assert resolve_airplay_stream_format(config, hw) == "wav"
+
+    def test_official_hardware_codes_are_covered(self):
+        """miot-spec 官方码与实机上报的历史写法并存, 三组别名都要能命中白名单且保持 WAV (回归: 收到 .mp3 不会拉流)"""
+        config = Config(conf_path="/tmp/miair-test-fmt")
+        for legacy, official in (("LX05A", "LX5A"), ("L07A", "L7A"), ("L16B", "16B")):
+            for hw in (legacy, official):
+                assert hw in NEED_USE_PLAY_MUSIC_API, hw
+                assert resolve_airplay_stream_format(config, hw) == "wav", hw
+                assert resolve_airplay_stream_format(config, hw.lower()) == "wav", hw
 
     def test_auto_other_model_uses_wav(self):
         """auto: 非白名单型号保持 WAV 零编码延迟"""
@@ -47,11 +75,17 @@ class TestResolveStreamFormat:
         config.airplay_stream_format = "flac"
         assert resolve_airplay_stream_format(config, "L99X") == "wav"
         assert resolve_airplay_stream_format(config, "X08C") == "mp3"
+        assert resolve_airplay_stream_format(config, "LX06") == "wav"
 
     def test_config_default_is_auto(self):
         """默认 auto, 支持环境变量覆盖"""
         config = Config(conf_path="/tmp/miair-test-fmt")
         assert config.airplay_stream_format == "auto"
+
+    def test_audio_stream_server_exposes_format(self):
+        """流服务器对外暴露当前格式, 供无拉流告警输出"""
+        assert AudioStreamServer("192.168.1.1", audio_format="mp3").audio_format == "mp3"
+        assert AudioStreamServer("192.168.1.1", audio_format="wav").audio_format == "wav"
 
 
 class TestAudioStreamServerMp3:
@@ -153,3 +187,98 @@ class TestCompatModeOverride:
         assert c._should_use_music_api() is False
         c = self._controller(tmp_path, "", None)
         assert c._should_use_music_api() is False
+
+
+class TestPullWatchdog:
+    """下发播放指令后确认音箱确实来拉流 (MiNA code 0 只代表指令已转发)"""
+
+    def _wrapper(self, monkeypatch, *, hardware="LX06", airplay2=False, has_clients=False):
+        from app.engine.airplay import speaker_airplay as mod
+
+        monkeypatch.setattr(mod, "_PULL_WATCH_SECONDS", 0.01)
+
+        class Controller:
+            speaker = Speaker(name="Test", hardware=hardware)
+
+            async def stop(self):
+                pass
+
+        class FakeServer:
+            stream_has_clients = has_clients
+            stream_audio_format = "mp3"
+
+            async def stop(self):
+                pass
+
+        wrapper = mod.SpeakerAirPlay("127.0.0.1", Controller(), airplay2=airplay2)
+        wrapper.airplay_server = FakeServer()
+        return wrapper
+
+    def test_no_pull_after_grace_logs_warning(self, monkeypatch, caplog):
+        """宽限期后仍无客户端 -> 告警并带出格式与型号, 不再误报「已开始播放」"""
+        import logging
+
+        wrapper = self._wrapper(monkeypatch)
+
+        async def scenario():
+            wrapper._arm_pull_watchdog(wrapper._command_revision)
+            assert wrapper._pull_watch_task is not None
+            await wrapper._pull_watch_task
+
+        with caplog.at_level(logging.WARNING, logger="miair"):
+            asyncio.run(scenario())
+        assert "未拉取音频流" in caplog.text
+        assert "mp3" in caplog.text and "LX06" in caplog.text
+        assert "开始播放" not in caplog.text
+
+    def test_clients_present_no_warning(self, monkeypatch, caplog):
+        """音箱已来拉流 -> 不告警"""
+        import logging
+
+        wrapper = self._wrapper(monkeypatch, has_clients=True)
+
+        async def scenario():
+            wrapper._arm_pull_watchdog(wrapper._command_revision)
+            await wrapper._pull_watch_task
+
+        with caplog.at_level(logging.WARNING, logger="miair"):
+            asyncio.run(scenario())
+        assert "未拉取音频流" not in caplog.text
+
+    def test_airplay2_never_arms(self, monkeypatch):
+        """AirPlay 2 不走 HTTP 拉流路线, 不启用看门狗 (无需事件循环)"""
+        wrapper = self._wrapper(monkeypatch, airplay2=True)
+        wrapper._arm_pull_watchdog(wrapper._command_revision)
+        assert wrapper._pull_watch_task is None
+
+    def test_redispatch_resets_and_stop_cancels(self, monkeypatch):
+        """重新下发会取消旧计时; stop() 不遗留任务"""
+        wrapper = self._wrapper(monkeypatch)
+
+        async def scenario():
+            wrapper._arm_pull_watchdog(wrapper._command_revision)
+            first = wrapper._pull_watch_task
+            wrapper._arm_pull_watchdog(wrapper._command_revision)
+            assert wrapper._pull_watch_task is not first
+            await asyncio.sleep(0)  # 让取消传递到旧任务
+            assert first.cancelled()
+            await wrapper.stop()
+            assert wrapper._pull_watch_task is None
+
+        asyncio.run(scenario())
+
+    def test_stale_revision_is_silent(self, monkeypatch, caplog):
+        """下发后又有新指令 (停止/切歌) -> 旧看门狗静默退出, 不误报"""
+        import logging
+
+        wrapper = self._wrapper(monkeypatch)
+
+        async def scenario():
+            wrapper._command_revision = 5
+            wrapper._arm_pull_watchdog(5)
+            wrapper._command_revision = 6  # 模拟后续 stop/切歌
+            await wrapper._pull_watch_task
+
+        with caplog.at_level(logging.WARNING, logger="miair"):
+            asyncio.run(scenario())
+        assert "未拉取音频流" not in caplog.text

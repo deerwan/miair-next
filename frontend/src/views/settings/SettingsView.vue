@@ -101,7 +101,7 @@
                       style="max-width: 400px"
                     />
                     <n-text depth="3" class="field-tip">
-                      自动: 触屏等 music-api 型号使用 MP3 转码 (其播放器不接受 WAV 流), 其余型号使用 WAV; 遇到投送无声可手动切换排查
+                      自动: 带屏型号 (触屏音箱 / 智能家庭屏, 如 X08C / LX04 / X10A) 使用 MP3 转码 (其播放器不接受 WAV 流), 其余型号使用 WAV; 遇到投送无声可手动切换排查
                     </n-text>
                   </div>
                 </n-form-item>

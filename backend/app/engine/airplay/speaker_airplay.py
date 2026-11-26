@@ -19,6 +19,9 @@ from app.engine.speaker import SpeakerController
 
 log = logging.getLogger("miair")
 
+# 下发播放指令后等待音箱来拉流的宽限期 (秒); 超时仍无客户端则告警
+_PULL_WATCH_SECONDS = 8.0
+
 
 class SpeakerAirPlay:
     """单个音箱的 AirPlay 接收器包装"""
@@ -42,6 +45,7 @@ class SpeakerAirPlay:
         self._play_grace_until: float = 0.0  # play 后宽限期
         self._session_audio_id: str | None = None  # 当前会话匹配到的曲库 audioID (续播复用)
         self._backfill_task: asyncio.Task | None = None  # 歌词迟到补发任务
+        self._pull_watch_task: asyncio.Task | None = None  # 拉流确认看门狗任务
         self._command_lock = asyncio.Lock()
         self._command_revision = 0
         self._command_revision_lock = threading.Lock()
@@ -122,6 +126,13 @@ class SpeakerAirPlay:
             except asyncio.CancelledError:
                 pass
             self._poll_task = None
+        if self._pull_watch_task:
+            self._pull_watch_task.cancel()
+            try:
+                await self._pull_watch_task
+            except asyncio.CancelledError:
+                pass
+            self._pull_watch_task = None
         if self.airplay_server:
             await self.airplay_server.stop()
             self.airplay_server = None
@@ -197,6 +208,8 @@ class SpeakerAirPlay:
     async def _play_on_speaker(self, stream_url: str, *, revision: int | None = None):
         """在对应音箱上播放"""
         try:
+            # 重新下发时重置拉流确认计时
+            self._cancel_pull_watchdog()
             if self.airplay2:
                 if self._backfill_task:
                     self._backfill_task.cancel()
@@ -216,8 +229,11 @@ class SpeakerAirPlay:
             if revision is not None and revision != self._command_revision:
                 return
             if success:
-                log.info(f"AirPlay 音频已在 {self.device_name} 开始播放: {stream_url}")
+                # 注意: play_url 返回 True 仅表示 MiNA 受理了指令, 音箱是否真的来拉流
+                # 由 _watch_stream_pull 延迟确认 (首个客户端连上时 audio_stream 会单独打日志)
+                log.info(f"AirPlay 已向 {self.device_name} 下发播放指令: {stream_url}")
                 self._start_poll()
+                self._arm_pull_watchdog(revision)
                 # 快速路径未拿到 audioID 时启动歌词监听（网易云等发送端元数据迟到，切歌也靠它更新）
                 if audio_id is None and self.config and getattr(self.config, "touchscreen_lyrics", False):
                     self._backfill_task = asyncio.create_task(self._lyrics_watcher(stream_url))
@@ -244,6 +260,41 @@ class SpeakerAirPlay:
                 log.warning(f"AirPlay 音频在 {self.device_name} 播放失败")
         except Exception as e:
             log.error(f"AirPlay 播放到 {self.device_name} 失败: {e}")
+
+    def _cancel_pull_watchdog(self):
+        task = self._pull_watch_task
+        if task:
+            task.cancel()
+            self._pull_watch_task = None
+
+    def _arm_pull_watchdog(self, revision: int | None):
+        """下发播放指令后延迟确认音箱确实来拉流 (仅 AirPlay 1 的 HTTP 拉流路线)
+
+        MiNA 的 play_by_music_url 回执 code 0 只表示指令已转发到设备, 不代表设备
+        真的播放; 部分 ROM 收到不接受的流地址 (如非触屏型号收到 .mp3) 会静默
+        不拉流, 表现为无声 + 「音频队列溢出」。宽限期后仍无客户端则给出明确告警。
+        """
+        self._cancel_pull_watchdog()
+        if self.airplay2:
+            return
+        self._pull_watch_task = asyncio.create_task(self._watch_stream_pull(revision))
+
+    async def _watch_stream_pull(self, revision: int | None):
+        try:
+            await asyncio.sleep(_PULL_WATCH_SECONDS)
+        except asyncio.CancelledError:
+            return
+        server = self.airplay_server
+        if server is None or (revision is not None and revision != self._command_revision):
+            return
+        if server.stream_has_clients:
+            return
+        log.warning(
+            f"AirPlay 已向 {self.device_name} 下发播放指令 {int(_PULL_WATCH_SECONDS)} 秒, "
+            f"但音箱未拉取音频流 (格式: {server.stream_audio_format}, "
+            f"型号: {self.speaker.hardware or '未知'}); 若持续无声, 请在服务设置将"
+            "「AirPlay 音频流格式」改为 wav, 或为该设备开启兼容模式"
+        )
 
     async def _resolve_audio_id(self) -> str | None:
         """触屏歌词匹配: 用 DAAP 元数据搜小米曲库换 audioID

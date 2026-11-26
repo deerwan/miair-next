@@ -655,6 +655,11 @@ class AirPlayServer:
         return self._stream_server.has_clients
 
     @property
+    def stream_audio_format(self) -> str:
+        """当前音频流格式 (wav / mp3)"""
+        return self._stream_server.audio_format
+
+    @property
     def client_name(self) -> str:
         """获取当前连接的客户端名称"""
         return self._client_name
